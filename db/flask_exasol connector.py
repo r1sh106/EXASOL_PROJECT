@@ -24,8 +24,31 @@ def get_exasol_connection():
         return None
 
 
-def home():
-    return "Flask is connected to the Exasol project!"
+def add_customer(d):
+    name=d["customerName"]
+    ph_no=d["phoneNumber"]
+    location=d["location"]
+
+
+
+def add_order(d):
+    ph_no=d["customerName"]
+    delivery=d["delivery"] #integer datatype
+
+def get_order_status(orderID):
+    pass
+
+def get_report(storeID):
+    pass
+
+
+
+
+
+    
+
+
+                   
 
 
 def setup_tables():
