@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS ORDERS(
+  order_id DECIMAL(18,0) IDENTITY PRIMARY KEY,
+  customer_name VARCHAR(100) NOT NULL,
+  store_id DECIMAL(18,0),
+  customer_phone VARCHAR(20) NOT NULL,
+  item VARCHAR(200) NOT NULL,
+  quantity DECIMAL(10,0) DEFAULT 1,
+  delivery_time VARCHAR(100),
+  status VARCHAR(20) DEFAULT 'NEW',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_orders_store FOREIGN KEY (store_id) REFERENCES STORE(store_id)
+);
