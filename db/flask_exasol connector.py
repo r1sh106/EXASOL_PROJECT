@@ -1,8 +1,8 @@
 import os
-from flask import Flask, jsonify
+from flask import  jsonify
 import pyexasol
 
-app = Flask(__name__)
+
 
 
 EXASOL_DSN = os.getenv("EXASOL_DSN", "your_host:8563")
@@ -23,11 +23,11 @@ def get_exasol_connection():
         print(f"Connection error: {e}")
         return None
 
-@app.route("/")
+
 def home():
     return "Flask is connected to the Exasol project!"
 
-@app.route("/setup-tables")
+
 def setup_tables():
     
     conn = get_exasol_connection()
@@ -51,7 +51,7 @@ def setup_tables():
         conn.close()
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route("/test-db")
+
 def test_db():
     """Quickly tests if the database responds."""
     conn = get_exasol_connection()
