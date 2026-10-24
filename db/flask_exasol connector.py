@@ -1,7 +1,7 @@
 import os
 from flask import  jsonify
 import pyexasol
-
+import orders.sql
 
 
 
@@ -25,9 +25,35 @@ def get_exasol_connection():
 
 
 def add_customer(d):
-    name=d["customerName"]
-    ph_no=d["phoneNumber"]
-    location=d["location"]
+    # Extract values passed into the function
+    name = d.get("customerName")
+    ph_no = d.get("phoneNumber")
+    location = d.get("location")
+    
+    # Open database connection
+    conn = get_exasol_connection()
+    if not conn:
+        return {"status": "error", "message": "Database connection failed"}
+    
+    try:
+        # Execute an SQL INSERT statement into your table
+        # (Make sure 'customers' matches the table name you created in your SQL files)
+        query = "INSERT INTO customers (customer_name, phone_number, location) VALUES (:name, :ph_no, :location)"
+        
+        conn.execute(query, {'name': name, 'ph_no': ph_no, 'location': location})
+        
+        conn.close()
+        return {"status": "success", "message": "Customer added successfully!"}
+        
+    except Exception as e:
+        conn.close()
+        return {"status": "error", "message": str(e)}
+
+
+
+
+
+
 
 
 
