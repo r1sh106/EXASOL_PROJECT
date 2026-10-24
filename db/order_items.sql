@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS ORDER_ITEMS(
+  order_id DECIMAL(18,0) NOT NULL,
+  item VARCHAR(200) NOT NULL,
+  quantity DECIMAL(10,0) DEFAULT 1,
+  price DECIMAL(10,2),
+  CONSTRAINT fk_items_order FOREIGN KEY (order_id) REFERENCES ORDERS(order_id)
+);
