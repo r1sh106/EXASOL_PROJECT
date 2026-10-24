@@ -1,162 +1,278 @@
 import os
+import re
+from contextlib import contextmanager
+from decimal import Decimal
+
 import pyexasol
 
-# Exasol connection settings
-EXASOL_DSN = os.getenv("EXASOL_DSN", "your_host:8563")
-EXASOL_USER = os.getenv("EXASOL_USER", "sys")
-EXASOL_PASSWORD = os.getenv("EXASOL_PASSWORD", "exasol")
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+DEFAULT_STORE_ID = int(os.getenv("DEFAULT_STORE_ID", "1"))
+
+ORDER_STATUSES = ("NEW", "PACKED", "OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED")
+STATUS_MESSAGES = {
+    "NEW": "Order received, not packed yet",
+    "PACKED": "Order is packed",
+    "OUT_FOR_DELIVERY": "Order is out for delivery",
+    "DELIVERED": "Order delivered",
+    "CANCELLED": "Order cancelled",
+}
+
+
+what 
+
+def _require_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing environment variable: {name}")
+    return value
+
 
 def get_exasol_connection():
-    """Helper function to open a connection to your Exasol database."""
     try:
-        conn = pyexasol.connect(
-            dsn=EXASOL_DSN,
-            user=EXASOL_USER,
-            password=EXASOL_PASSWORD,
-            encryption=True
+        return pyexasol.connect(
+            dsn=_require_env("EXASOL_DSN"),
+            user=_require_env("EXASOL_USER"),
+            password=_require_env("EXASOL_PASSWORD"),
+            encryption=True,
+            autocommit=False,  # we commit/rollback ourselves so multi-step writes are atomic
         )
-        return conn
     except Exception as e:
         print(f"Connection error: {e}")
         return None
 
 
-# 1. Add Customer Function
-def add_customer(d):
-    name = d.get("customerName")
-    ph_no = d.get("phoneNumber")
-    location = d.get("location")
-    
+@contextmanager
+def _connection():
+    """Opens a connection, commits on success, rolls back on error, always closes."""
     conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error", "message": "Database connection failed"}
-    
+    if conn is None:
+        raise ConnectionError("Could not connect to Exasol")
     try:
-        query = "INSERT INTO customers (customer_name, phone_number, location) VALUES (:name, :ph_no, :location)"
-        conn.execute(query, {'name': name, 'ph_no': ph_no, 'location': location})
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return {"status": "success", "message": "Customer added successfully!"}
-    except Exception as e:
-        conn.close()
-        return {"status": "error", "message": str(e)}
 
 
-# 2. Add Order Function -> returns generated order ID
-def add_order(d):
-    ph_no = d.get("phoneNumber")
-    items = d.get("items", {})  # Nested dictionary of items
-    delivery = d.get("delivery")  # quick/normal/after n days
-    
-    conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error", "message": "Database connection failed"}
-    
-    try:
-        query = """
-            INSERT INTO orders (phone_number, items_json, delivery_type, order_status) 
-            VALUES (:ph_no, :items, :delivery)
-        """
-        conn.execute(query, {
-            'ph_no': ph_no, 
-            'items': str(items), 
-            'delivery': delivery
-        })
-        
-        # Fetch the latest generated order ID for this customer
-        id_query = "SELECT MAX(order_id) FROM orders WHERE phone_number = :ph_no"
-        stmt = conn.execute(id_query, {'ph_no': ph_no})
-        order_id = stmt.fetchone()[0]
-        
-        conn.close()
-        return {"status": "success", "orderID": order_id, "message": "Order placed successfully!"}
-    except Exception as e:
-        conn.close()
-        return {"status": "error", "message": str(e)}
+def _num(value):
+    return float(value) if isinstance(value, Decimal) else value
 
 
-# 3. Get Order Status Function
-def get_order_status(orderID):
-    conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error", "message": "Database connection failed"}
-    
-    try:
-        query = "SELECT order_status FROM orders WHERE order_id = :order_id"
-        stmt = conn.execute(query, {'order_id': orderID})
-        result = stmt.fetchone()
-        conn.close()
-        
-        if result:
-            return {"status": "success", "orderID": orderID, "order_status": result[0]}
+# ------------------------------------------------------- query file loader
+
+_QUERIES = {}
+
+
+def _load_queries():
+    """Reads queries.sql. Each query starts with a '-- name: <name>' line."""
+    name = None
+    with open(os.path.join(BASE_DIR, "queries.sql"), encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("-- name:"):
+                name = line.split(":", 1)[1].strip()
+                _QUERIES[name] = []
+            elif name:
+                _QUERIES[name].append(line)
+    for key, lines in _QUERIES.items():
+        _QUERIES[key] = "".join(lines).strip().rstrip(";")
+
+
+def q(name):
+    """Returns the SQL text of a named query from queries.sql."""
+    if not _QUERIES:
+        _load_queries()
+    return _QUERIES[name]
+
+
+# ------------------------------------------------------------------- helpers
+
+def _parse_items(items):
+    """Accepts {"Burger": 2} or {"Burger": {"quantity": 2, "price": 120}}."""
+    if not isinstance(items, dict) or not items:
+        raise ValueError("items must be a non-empty dictionary")
+    parsed = []
+    for name, value in items.items():
+        if isinstance(value, dict):
+            qty, price = value.get("quantity", 1), value.get("price")
         else:
-            return {"status": "error", "message": "Order not found"}
-    except Exception as e:
-        conn.close()
-        return {"status": "error", "message": str(e)}
+            qty, price = value, None
+        qty = int(qty)
+        if qty <= 0:
+            raise ValueError(f"Quantity for '{name}' must be greater than 0")
+        parsed.append((str(name).strip(), qty, None if price is None else float(price)))
+    return parsed
 
 
-# 4. Get Report Function (aggregated total sales & credits due in single response)
-def get_report(storeID):
-    conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error", "message": "Database connection failed"}
-    
-    try:
-        # Aggregated sales data across all customers for the store
-        sales_query = "SELECT SUM(total_amount) FROM sales WHERE store_id = :store_id"
-        sales_stmt = conn.execute(sales_query, {'store_id': storeID})
-        total_sales = sales_stmt.fetchone()[0] or 0.0
-        
-        # List of credits due
-        credit_query = "SELECT customer_name, credit_due FROM credit WHERE store_id = :store_id AND credit_due > 0"
-        credit_stmt = conn.execute(credit_query, {'store_id': storeID})
-        credits_due = [{"customer": row[0], "dueAmount": row[1]} for row in credit_stmt.fetchall()]
-        
-        conn.close()
-        return {
-            "status": "success",
-            "storeID": storeID,
-            "totalSales": total_sales,
-            "creditsDue": credits_due
-        }
-    except Exception as e:
-        conn.close()
-        return {"status": "error", "message": str(e)}
+def _parse_delivery(delivery):
+    """quick / normal / after n days (also accepts a plain int n)."""
+    if isinstance(delivery, int):
+        return f"after {delivery} days"
+    text = str(delivery).strip().lower()
+    if text in ("quick", "normal"):
+        return text
+    match = re.search(r"\d+", text)
+    if match:
+        return f"after {int(match.group())} days"
+    raise ValueError("delivery must be 'quick', 'normal' or 'after n days'")
 
 
-# Setup Tables Function (executes all sql files including orders.sql)
+# ------------------------------------------------------------------- setup
+
 def setup_tables():
-    conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error", "message": "Could not connect to Exasol"}
-
-    sql_files = ['store.sql', 'sales.sql', 'credit.sql', 'orders.sql']
-    executed_files = []
-
+    """Creates all tables. Order matters because of foreign keys."""
+    sql_files = [
+        "store.sql", "customers.sql", "orders.sql",
+        "order_items.sql", "sales.sql", "credit.sql",
+    ]
+    executed, missing = [], []
     try:
-        for file_name in sql_files:
-            if os.path.exists(file_name):
-                with open(file_name, 'r') as f:
-                    script = f.read()
-                    conn.execute(script)
-                    executed_files.append(file_name)
-        
-        conn.close()
-        return {"status": "success", "executed_tables": executed_files}
+        with _connection() as conn:
+            for file_name in sql_files:
+                path = os.path.join(BASE_DIR, file_name)
+                if not os.path.exists(path):
+                    missing.append(file_name)
+                    continue
+                with open(path, "r", encoding="utf-8") as f:
+                    conn.execute(f.read())
+                executed.append(file_name)
+        return {"status": "success", "executed": executed, "missing": missing}
     except Exception as e:
-        conn.close()
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": str(e), "executed": executed}
 
 
 def test_db():
     """Quickly tests if the database responds."""
-    conn = get_exasol_connection()
-    if not conn:
-        return {"status": "error"}
-    
-    stmt = conn.execute("SELECT CURRENT_TIMESTAMP")
-    result = stmt.fetchone()
-    conn.close()
-    return {"status": "success", "current_time": str(result[0])}
+    try:
+        with _connection() as conn:
+            now = conn.execute(q("now")).fetchval()
+        return {"status": "success", "current_time": str(now)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ------------------------------------------------------------ 1) customers
+
+def add_customer(data):
+    """data = {"customerName": ..., "phoneNumber": ..., "location": ...}
+    Creates the customer, or updates name/location if the phone already exists."""
+    name = (data.get("customerName") or "").strip()
+    phone = (data.get("phoneNumber") or "").strip()
+    location = (data.get("location") or "").strip() or None
+    if not name or not phone:
+        raise ValueError("customerName and phoneNumber are required")
+
+    params = {"name": name, "phone": phone, "loc": location}
+    with _connection() as conn:
+        exists = conn.execute(q("customer_exists"), params).fetchval()
+        conn.execute(q("update_customer" if exists else "insert_customer"), params)
+    return {"phoneNumber": phone, "created": not exists}
+
+
+# --------------------------------------------------------------- 2) orders
+
+def add_order(data, store_id=None):
+    """data = {"phoneNumber": ..., "items": {"Burger": 2, "Fries": {"quantity": 1, "price": 80}},
+               "delivery": "quick" | "normal" | "after 3 days"}
+    Returns the generated order ID (show this to the customer)."""
+    phone = (data.get("phoneNumber") or "").strip()
+    items = _parse_items(data.get("items"))
+    delivery = _parse_delivery(data.get("delivery"))
+    store_id = DEFAULT_STORE_ID if store_id is None else store_id
+
+    with _connection() as conn:
+        customer_name = conn.execute(q("get_customer_name"), {"phone": phone}).fetchval()
+        if customer_name is None:
+            raise ValueError("Customer not registered. Call add_customer() first.")
+
+        conn.execute(
+            q("insert_order"),
+            {"sid": store_id, "name": customer_name, "phone": phone, "dt": delivery},
+        )
+        # Exasol has no RETURNING, so read back the newest order of this customer (same transaction)
+        order_id = int(conn.execute(q("latest_order_id"), {"phone": phone}).fetchval())
+
+        for item, qty, price in items:
+            conn.execute(
+                q("insert_item"),
+                {"oid": order_id, "item": item, "qty": qty, "price": price},
+            )
+    return order_id
+
+
+def get_order_status(order_id):
+    """Returns status of an order: NEW / PACKED / OUT_FOR_DELIVERY / DELIVERED / CANCELLED."""
+    with _connection() as conn:
+        row = conn.execute(q("order_info"), {"oid": int(order_id)}).fetchone()
+        if row is None:
+            return {"found": False, "message": "Order not found"}
+        items = conn.execute(q("order_items"), {"oid": int(order_id)}).fetchall()
+    status = row[0]
+    return {
+        "found": True,
+        "orderId": int(order_id),
+        "status": status,
+        "message": STATUS_MESSAGES.get(status, status),
+        "delivery": row[1],
+        "placedAt": str(row[2]),
+        "items": [{"item": i[0], "quantity": int(i[1])} for i in items],
+    }
+
+
+def update_order_status(order_id, new_status):
+    """For the shopkeeper side. Moving an order to DELIVERED also records it in SALES (once)."""
+    new_status = new_status.strip().upper()
+    if new_status not in ORDER_STATUSES:
+        raise ValueError(f"status must be one of {ORDER_STATUSES}")
+    params = {"oid": int(order_id), "st": new_status}
+
+    with _connection() as conn:
+        current = conn.execute(q("current_status"), params).fetchval()
+        if current is None:
+            return {"found": False, "message": "Order not found"}
+
+        conn.execute(q("update_status"), params)
+
+        if new_status == "DELIVERED" and current != "DELIVERED":
+            conn.execute(q("record_delivered_sales"), params)
+    return {"found": True, "orderId": int(order_id), "status": new_status}
+
+
+# ---------------------------------------------------------------- 3) report
+
+def get_report(store_id=None):
+    """Total sales of the store (all customers) + list of credits that are due."""
+    store_id = DEFAULT_STORE_ID if store_id is None else store_id
+    params = {"sid": store_id}
+
+    with _connection() as conn:
+        sales = conn.execute(q("sales_summary"), params).fetchone()
+        credits = conn.execute(q("credits_due"), params).fetchall()
+
+    credit_list = [{"customer": c[0], "amountDue": _num(c[1])} for c in credits]
+    return {
+        "storeId": store_id,
+        "sales": {
+            "totalSalesRecords": int(sales[0]),
+            "totalRevenue": _num(sales[1]),
+            "totalUnitsSold": int(sales[2]),
+        },
+        "creditsDue": {
+            "totalDue": sum(c["amountDue"] for c in credit_list),
+            "customers": credit_list,
+        },
+    }
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    print(test_db())
