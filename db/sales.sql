@@ -1,1 +1,1 @@
-CREATE TABLE SALES(store_id DECIMAL(18,0),product_name VARCHAR(100) NOT NULL,product_price DECIMAL(10,2),product_quantity DECIMAL(18,0),date_of_sale DATE,credit BOOLEAN,CONSTRAINT fk_sales_stores FOREIGN KEY (store_id) REFERENCES STORE(store_id));
+CREATE TABLE IF NOT EXISTS SALES(store_id DECIMAL(18,0),product_name VARCHAR(100) NOT NULL,product_price DECIMAL(10,2),product_quantity DECIMAL(18,0),date_of_sale DATE,credit BOOLEAN,CONSTRAINT fk_sales_stores FOREIGN KEY (store_id) REFERENCES STORE(store_id));
