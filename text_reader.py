@@ -1,7 +1,5 @@
 #install these packages
-
-pip install google-genai pydantic pillow
-
+#pip install google-genai pydantic pillow
 
 import os
 import sqlite3
@@ -96,3 +94,4 @@ if __name__ == "__main__":
     if Path(sample_image).exists():
         process_and_store_image(sample_image)
         print(f"Successfully extracted and saved text from {sample_image}")
+
