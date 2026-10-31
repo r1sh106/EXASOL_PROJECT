@@ -1,7 +1,11 @@
-pip install flask requests python-dotenv
+#pip install flask requests python-dotenv
 import os
 import requests
+
 from flask import Flask, request, jsonify
+from text_reader import process_and_store_image,init_db
+
+init_db()
 
 app = Flask(__name__)
 
@@ -56,11 +60,11 @@ def verify_webhook():
 
 @app.route("/webhook", methods=["POST"])
 def receive_message():
-    """Receives incoming messages from users and executes chatbot logic."""
-    body = request.get_json()
+    """Receives incoming messages (text or images) from users and executes chatbot logic."""
+    body = request.get_json() or {}
 
-    # Check if the incoming payload is a WhatsApp status update or message
     try:
+        # Validate that the incoming payload contains WhatsApp message data
         if (
             body.get("object")
             and body.get("entry")
@@ -70,49 +74,93 @@ def receive_message():
             change_value = body["entry"][0]["changes"][0]["value"]
             message_data = change_value["messages"][0]
             
-            sender_phone = message_data["from"]  # Customer's WhatsApp phone number
-            message_body = message_data.get("text", {}).get("body", "").strip()
+            sender_phone = message_data.get("from")  # Customer's WhatsApp phone number
+            msg_type = message_data.get("type")
 
-            if not message_body:
-                return jsonify({"status": "ignored"}), 200
+            # --- 1. Handle Regular Text Messages ---
+            if msg_type == "text":
+                message_body = message_data.get("text", {}).get("body", "").strip()
 
-            # --- Chatbot Flow Logic ---
-            user_state = user_sessions.get(sender_phone, {"step": "WELCOME", "item": None})
+                if not message_body:
+                    return jsonify({"status": "ignored"}), 200
 
-            if user_state["step"] == "WELCOME" or message_body.lower() in ["hi", "hello", "menu", "start"]:
-                user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
-                send_whatsapp_message(
-                    sender_phone, 
-                    "Welcome to *QuickBite Store*! 🍔\nWhat would you like to order today? Please type your item/dish name:"
-                )
+                # State Machine Logic
+                user_state = user_sessions.get(sender_phone, {"step": "WELCOME", "item": None})
 
-            elif user_state["step"] == "WAITING_FOR_ORDER":
-                user_sessions[sender_phone] = {"step": "WAITING_FOR_TIME", "item": message_body}
-                send_whatsapp_message(
-                    sender_phone, 
-                    f"Great choice! You selected: *{message_body}*.\nWhen would you like it delivered? (e.g., 'As soon as possible', or 'Today at 7:30 PM')"
-                )
+                if user_state["step"] == "WELCOME" or message_body.lower() in ["hi", "hello", "menu", "start"]:
+                    user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
+                    send_whatsapp_message(
+                        sender_phone, 
+                        "Welcome to *QuickBite Store*! 🍔\nWhat would you like to order today? Please type your item/dish name:"
+                    )
 
-            elif user_state["step"] == "WAITING_FOR_TIME":
-                ordered_item = user_state["item"]
-                delivery_time = message_body
+                elif user_state["step"] == "WAITING_FOR_ORDER":
+                    user_sessions[sender_phone] = {"step": "WAITING_FOR_TIME", "item": message_body}
+                    send_whatsapp_message(
+                        sender_phone, 
+                        f"Great choice! You selected: *{message_body}*.\nWhen would you like it delivered? (e.g., 'As soon as possible', or 'Today at 7:30 PM')"
+                    )
+
+                elif user_state["step"] == "WAITING_FOR_TIME":
+                    ordered_item = user_state["item"]
+                    delivery_time = message_body
+                    
+                    user_sessions.pop(sender_phone, None)
+                    
+                    confirmation_msg = (
+                        f"✅ *Order Confirmed!*\n\n"
+                        f"🍔 *Item:* {ordered_item}\n"
+                        f"⏰ *Delivery Time:* {delivery_time}\n\n"
+                        f"Thank you for ordering with us! We will notify you when it's on the way."
+                    )
+                    send_whatsapp_message(sender_phone, confirmation_msg)
+
+                else:
+                    user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
+                    send_whatsapp_message(
+                        sender_phone, 
+                        "Let's start over. What item would you like to order?"
+                    )
+
+            # --- 2. Handle Image / Written Notes ---
+            elif msg_type == "image":
+                image_id = message_data["image"]["id"]
                 
-                # Clear session state / complete order
-                user_sessions.pop(sender_phone, None)
-                
-                confirmation_msg = (
-                    f"✅ *Order Confirmed!*\n\n"
-                    f"🍔 *Item:* {ordered_item}\n"
-                    f"⏰ *Delivery Time:* {delivery_time}\n\n"
-                    f"Thank you for ordering with us! We will notify you when it's on the way."
+                # Fetch image download URL from Meta Graph API
+                media_headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                media_res = requests.get(
+                    f"https://graph.facebook.com/{GRAPH_API_VERSION}/{image_id}", 
+                    headers=media_headers
                 )
-                send_whatsapp_message(sender_phone, confirmation_msg)
+                media_url = media_res.json().get("url")
+                
+                # Download binary image data
+                img_bytes = requests.get(media_url, headers=media_headers).content
+                
+                # Save locally temporarily for Gemini to process
+                temp_filename = f"temp_{sender_phone}.jpg"
+                with open(temp_filename, "wb") as f:
+                    f.write(img_bytes)
+                    
+                try:
+                    # Run text extraction using text_reader.py
+                    process_and_store_image(temp_filename)
+                    send_whatsapp_message(
+                        sender_phone, 
+                        "📸 Got your note/image! I've extracted the text and saved it to the database."
+                    )
+                except Exception as e:
+                    send_whatsapp_message(sender_phone, f"Sorry, I couldn't read that image: {e}")
+                finally:
+                    # Clean up temporary file
+                    if os.path.exists(temp_filename):
+                        os.remove(temp_filename)
 
+            # --- 3. Handle Unsupported Media Types ---
             else:
-                user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
                 send_whatsapp_message(
                     sender_phone, 
-                    "Let's start over. What item would you like to order?"
+                    "Sorry, I can currently only process text messages and photos/written notes."
                 )
 
         return jsonify({"status": "success"}), 200
