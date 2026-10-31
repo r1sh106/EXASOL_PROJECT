@@ -1,175 +1,402 @@
-#pip install flask requests python-dotenv
+# Install dependencies:
+# pip install flask requests
+
 import os
+import re
 import requests
 
 from flask import Flask, request, jsonify
-from text_reader import process_and_store_image,init_db
-
-init_db()
 
 app = Flask(__name__)
 
-# Load credentials from environment variables for security
-# (Set these in your OS environment or .env file)
-ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "YOUR_PERMANENT_OR_TEMP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "YOUR_PHONE_NUMBER_ID")
-VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "my_secure_verify_token")
+# -----------------------------------------
+# 1. CONFIGURATION
+# -----------------------------------------
 
-GRAPH_API_VERSION = "v21.0"
-WHATSAPP_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{PHONE_NUMBER_ID}/messages"
+TOKEN = os.getenv(
+    "WHATSAPP_TOKEN",
+    "YOUR_WHATSAPP_ACCESS_TOKEN"
+)
 
-# Simple in-memory session store to keep track of user conversation states
-# Format: { "phone_number": {"step": "ASKED_ITEM", "item": None} }
+PHONE_NUMBER_ID = os.getenv(
+    "WHATSAPP_PHONE_ID",
+    "YOUR_PHONE_NUMBER_ID"
+)
+
+VERIFY_TOKEN = os.getenv(
+    "VERIFY_TOKEN",
+    "my_secure_verify_token"
+)
+
+API_VERSION = os.getenv(
+    "WHATSAPP_API_VERSION",
+    "v23.0"
+)
+
+# -----------------------------------------
+# 2. SESSION STORAGE
+# -----------------------------------------
+
 user_sessions = {}
 
-def send_whatsapp_message(recipient_phone, message_text):
-    """Sends a text message back to the user via WhatsApp Cloud API."""
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": recipient_phone,
-        "type": "text",
-        "text": {"preview_url": False, "body": message_text},
-    }
-    
-    response = requests.post(WHATSAPP_URL, json=payload, headers=headers)
-    if response.status_code != 200:
-        print(f"Failed to send message: {response.text}")
-    return response.json()
+# -----------------------------------------
+# 3. PRODUCT PRICE CATALOG
+# -----------------------------------------
 
+PRICE_CATALOG = {
+    "milk": 3.50,
+    "bread": 2.50,
+    "eggs": 4.00,
+    "butter": 5.00,
+    "rice": 10.00,
+    "sugar": 2.00,
+    "default": 3.00
+}
+
+
+# -----------------------------------------
+# 4. WHATSAPP WEBHOOK VERIFICATION
+# -----------------------------------------
 
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    """Handles the webhook verification handshake with Meta."""
+
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
-    if mode and token:
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            print("WEBHOOK_VERIFIED")
-            return challenge, 200
-        else:
-            return "Verification token mismatch", 403
-    return "Invalid verification request", 400
+    if mode == "subscribe" and token == VERIFY_TOKEN:
 
+        print("Webhook verified successfully!")
+
+        return challenge, 200
+
+    return "Verification failed", 403
+
+
+# -----------------------------------------
+# 5. RECEIVE WHATSAPP MESSAGES
+# -----------------------------------------
 
 @app.route("/webhook", methods=["POST"])
-def receive_message():
-    """Receives incoming messages (text or images) from users and executes chatbot logic."""
-    body = request.get_json() or {}
+def handle_incoming_message():
+
+    body = request.get_json(silent=True)
+
+    if not body:
+        return jsonify({"status": "Invalid JSON"}), 400
+
+    if body.get("object") != "whatsapp_business_account":
+        return jsonify({"status": "Not a WhatsApp event"}), 404
 
     try:
-        # Validate that the incoming payload contains WhatsApp message data
-        if (
-            body.get("object")
-            and body.get("entry")
-            and body["entry"][0].get("changes")
-            and body["entry"][0]["changes"][0].get("value").get("messages")
-        ):
-            change_value = body["entry"][0]["changes"][0]["value"]
-            message_data = change_value["messages"][0]
-            
-            sender_phone = message_data.get("from")  # Customer's WhatsApp phone number
-            msg_type = message_data.get("type")
 
-            # --- 1. Handle Regular Text Messages ---
-            if msg_type == "text":
-                message_body = message_data.get("text", {}).get("body", "").strip()
+        for entry in body.get("entry", []):
 
-                if not message_body:
-                    return jsonify({"status": "ignored"}), 200
+            for change in entry.get("changes", []):
 
-                # State Machine Logic
-                user_state = user_sessions.get(sender_phone, {"step": "WELCOME", "item": None})
+                value = change.get("value", {})
 
-                if user_state["step"] == "WELCOME" or message_body.lower() in ["hi", "hello", "menu", "start"]:
-                    user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
-                    send_whatsapp_message(
-                        sender_phone, 
-                        "Welcome to *QuickBite Store*! 🍔\nWhat would you like to order today? Please type your item/dish name:"
-                    )
+                messages = value.get("messages", [])
 
-                elif user_state["step"] == "WAITING_FOR_ORDER":
-                    user_sessions[sender_phone] = {"step": "WAITING_FOR_TIME", "item": message_body}
-                    send_whatsapp_message(
-                        sender_phone, 
-                        f"Great choice! You selected: *{message_body}*.\nWhen would you like it delivered? (e.g., 'As soon as possible', or 'Today at 7:30 PM')"
-                    )
+                for message in messages:
 
-                elif user_state["step"] == "WAITING_FOR_TIME":
-                    ordered_item = user_state["item"]
-                    delivery_time = message_body
-                    
-                    user_sessions.pop(sender_phone, None)
-                    
-                    confirmation_msg = (
-                        f"✅ *Order Confirmed!*\n\n"
-                        f"🍔 *Item:* {ordered_item}\n"
-                        f"⏰ *Delivery Time:* {delivery_time}\n\n"
-                        f"Thank you for ordering with us! We will notify you when it's on the way."
-                    )
-                    send_whatsapp_message(sender_phone, confirmation_msg)
+                    sender_id = message.get("from")
 
-                else:
-                    user_sessions[sender_phone] = {"step": "WAITING_FOR_ORDER", "item": None}
-                    send_whatsapp_message(
-                        sender_phone, 
-                        "Let's start over. What item would you like to order?"
-                    )
+                    if not sender_id:
+                        continue
 
-            # --- 2. Handle Image / Written Notes ---
-            elif msg_type == "image":
-                image_id = message_data["image"]["id"]
-                
-                # Fetch image download URL from Meta Graph API
-                media_headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-                media_res = requests.get(
-                    f"https://graph.facebook.com/{GRAPH_API_VERSION}/{image_id}", 
-                    headers=media_headers
-                )
-                media_url = media_res.json().get("url")
-                
-                # Download binary image data
-                img_bytes = requests.get(media_url, headers=media_headers).content
-                
-                # Save locally temporarily for Gemini to process
-                temp_filename = f"temp_{sender_phone}.jpg"
-                with open(temp_filename, "wb") as f:
-                    f.write(img_bytes)
-                    
-                try:
-                    # Run text extraction using text_reader.py
-                    process_and_store_image(temp_filename)
-                    send_whatsapp_message(
-                        sender_phone, 
-                        "📸 Got your note/image! I've extracted the text and saved it to the database."
-                    )
-                except Exception as e:
-                    send_whatsapp_message(sender_phone, f"Sorry, I couldn't read that image: {e}")
-                finally:
-                    # Clean up temporary file
-                    if os.path.exists(temp_filename):
-                        os.remove(temp_filename)
+                    message_type = message.get("type")
 
-            # --- 3. Handle Unsupported Media Types ---
-            else:
-                send_whatsapp_message(
-                    sender_phone, 
-                    "Sorry, I can currently only process text messages and photos/written notes."
-                )
+                    if message_type == "text":
+
+                        message_text = message.get(
+                            "text", {}
+                        ).get("body", "").strip()
+
+                        if message_text:
+
+                            print(
+                                f"Message from {sender_id}: "
+                                f"{message_text}"
+                            )
+
+                            handle_conversation_flow(
+                                sender_id,
+                                message_text
+                            )
+
+                    else:
+
+                        send_whatsapp_message(
+                            sender_id,
+                            "Please send your grocery order as text."
+                        )
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"Error processing webhook: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
 
+        print("Webhook processing error:", str(e))
+
+        return jsonify({"status": "error"}), 500
+
+
+# -----------------------------------------
+# 6. CONVERSATION FLOW
+# -----------------------------------------
+
+def handle_conversation_flow(sender_id, text):
+
+    session = user_sessions.get(
+        sender_id,
+        {"state": "IDLE"}
+    )
+
+    state = session.get("state")
+
+    # STEP A: RECEIVE ORDER
+
+    if state in ["IDLE", "COMPLETED"]:
+
+        session = {
+            "state": "WAITING_FOR_LOCATION",
+            "raw_order": text,
+            "location": None,
+            "timing": None
+        }
+
+        user_sessions[sender_id] = session
+
+        send_whatsapp_message(
+            sender_id,
+
+            f"🛒 Order Received!\n\n"
+            f"We noted your items:\n"
+            f"{text}\n\n"
+            f"📍 Please share your delivery address:"
+        )
+
+    # STEP B: RECEIVE LOCATION
+
+    elif state == "WAITING_FOR_LOCATION":
+
+        session["location"] = text
+
+        session["state"] = "WAITING_FOR_TIMING"
+
+        user_sessions[sender_id] = session
+
+        send_whatsapp_message(
+            sender_id,
+
+            "📍 Location received!\n\n"
+
+            "When would you like your order delivered?\n\n"
+
+            "1. ASAP\n"
+            "2. Today Evening\n"
+            "3. Tomorrow Morning\n"
+            "4. Specify your preferred time"
+        )
+
+    # STEP C: RECEIVE DELIVERY TIME
+
+    elif state == "WAITING_FOR_TIMING":
+
+        session["timing"] = text
+
+        session["state"] = "COMPLETED"
+
+        user_sessions[sender_id] = session
+
+        summary = generate_order_summary(session)
+
+        send_whatsapp_message(
+            sender_id,
+            summary
+        )
+
+    else:
+
+        user_sessions[sender_id] = {
+            "state": "IDLE"
+        }
+
+        send_whatsapp_message(
+            sender_id,
+
+            "Welcome to our grocery store!\n\n"
+            "Please send your grocery list to get started."
+        )
+
+
+# -----------------------------------------
+# 7. GENERATE ORDER SUMMARY
+# -----------------------------------------
+
+def generate_order_summary(session):
+
+    items_list = [
+        item.strip()
+
+        for item in re.split(
+            r',|\n',
+            session["raw_order"]
+        )
+
+        if item.strip()
+    ]
+
+    total_amount = 0.0
+
+    itemized_lines = []
+
+    for index, item in enumerate(items_list, 1):
+
+        lower_item = item.lower()
+
+        price = PRICE_CATALOG["default"]
+
+        for key, val in PRICE_CATALOG.items():
+
+            if key != "default" and key in lower_item:
+
+                price = val
+
+                break
+
+        total_amount += price
+
+        itemized_lines.append(
+            f"{index}. {item} - ${price:.2f}"
+        )
+
+    itemized_text = "\n".join(itemized_lines)
+
+    return (
+
+        "📋 FINAL ORDER SUMMARY\n\n"
+
+        f"🛒 Items Ordered:\n"
+        f"{itemized_text}\n\n"
+
+        f"💰 Estimated Total: ${total_amount:.2f}\n\n"
+
+        f"📍 Delivery Location:\n"
+        f"{session['location']}\n\n"
+
+        f"⏰ Delivery Timing:\n"
+        f"{session['timing']}\n\n"
+
+        "✅ Order registered successfully!\n\n"
+
+        "The shopkeeper will review your order "
+        "and arrange delivery shortly.\n\n"
+
+        "Thank you for shopping with us! 🙏"
+    )
+
+
+# -----------------------------------------
+# 8. SEND WHATSAPP MESSAGE
+# -----------------------------------------
+
+def send_whatsapp_message(recipient_id, message_text):
+
+    if (
+        TOKEN == "YOUR_WHATSAPP_ACCESS_TOKEN"
+        or PHONE_NUMBER_ID == "YOUR_PHONE_NUMBER_ID"
+    ):
+
+        print("ERROR: Configure your WhatsApp credentials.")
+
+        return False
+
+    url = (
+        f"https://graph.facebook.com/"
+        f"{API_VERSION}/{PHONE_NUMBER_ID}/messages"
+    )
+
+    headers = {
+
+        "Authorization": f"Bearer {TOKEN}",
+
+        "Content-Type": "application/json"
+
+    }
+
+    payload = {
+
+        "messaging_product": "whatsapp",
+
+        "to": recipient_id,
+
+        "type": "text",
+
+        "text": {
+
+            "body": message_text
+
+        }
+
+    }
+
+    try:
+
+        response = requests.post(
+
+            url,
+
+            json=payload,
+
+            headers=headers,
+
+            timeout=15
+
+        )
+
+        response.raise_for_status()
+
+        print("WhatsApp message sent successfully!")
+
+        return True
+
+    except requests.exceptions.RequestException as e:
+
+        print("WhatsApp API Error:", str(e))
+
+        if e.response is not None:
+
+            print("API Response:", e.response.text)
+
+        return False
+
+
+# -----------------------------------------
+# 9. HOME ROUTE
+# -----------------------------------------
+
+@app.route("/", methods=["GET"])
+def home():
+
+    return "WhatsApp Grocery Ordering Bot is Running!"
+
+
+# -----------------------------------------
+# 10. RUN FLASK APPLICATION
+# -----------------------------------------
 
 if __name__ == "__main__":
-    # Run the Flask app on port 5000 (Use ngrok or a public URL to expose it to Meta)
-    app.run(port=5000, debug=True)
+
+    app.run(
+
+        host="0.0.0.0",
+
+        port=3000,
+
+        debug=True
+
+    )
+
+
