@@ -1,0 +1,26 @@
+{% set cols = [("pending", "Pending for review", "pill-attn", "bi-hourglass-split"), ("ready", "Ready to pack", "pill-brand", "bi-box-seam"), ("completed", "Completed today", "pill-ok", "bi-check2-circle")] %}
+{% set icons = {"photo": "bi-camera", "voice": "bi-mic", "text": "bi-chat-left-text"} %}
+<div class="row g-3" id="queue" data-ids="{% for k, _, _, _ in cols %}{% for o in queue[k] %}{{ o.order_id|int }},{% endfor %}{% endfor %}">
+  {% for key, label, pill, icon in cols %}
+  <div class="col-12 col-lg-4">
+    <section class="q-col" data-state="{{ key }}" aria-label="{{ label }}">
+      <div class="q-head"><h3><i class="bi {{ icon }} me-1"></i>{{ label }}</h3><span class="pill {{ pill }} num">{{ queue[key]|length }}</span></div>
+      {% for o in queue[key] %}
+      <a class="q-item" href="{{ url_for('verify', oid=o.order_id|int) }}" data-id="{{ o.order_id|int }}">
+        <div class="d-flex justify-content-between gap-2">
+          <b>#{{ o.order_id|int }} · {{ o.customer_name }}</b>
+          <span class="num fw-bold">{{ o.total|rs }}</span>
+        </div>
+        <div class="d-flex justify-content-between gap-2 small k-muted mt-1">
+          <span><i class="bi {{ icons.get(o.channel, 'bi-chat') }}"></i> {{ o.channel|capitalize }} · {{ o.n_items|int }} item{{ '' if o.n_items|int == 1 else 's' }}
+            {% if o.n_out|int %}<span class="pill pill-bad ms-1">{{ o.n_out|int }} unavailable</span>{% endif %}</span>
+          <span>{{ o.created_at|ago }}</span>
+        </div>
+      </a>
+      {% else %}
+      <p class="q-empty mb-0">{% if key == 'pending' %}No new orders. Share your shop link to get some.{% elif key == 'ready' %}Nothing waiting to be packed.{% else %}No orders completed yet today.{% endif %}</p>
+      {% endfor %}
+    </section>
+  </div>
+  {% endfor %}
+</div>

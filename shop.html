@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Order from {{ shop.shop_name }}{% endblock %}
+{% block brand_href %}{{ url_for('shop_page', shop_id=shop.shop_id) }}{% endblock %}
+{% block brand %}{{ shop.shop_name }}{% endblock %}
+{% block nav %}{% if cust %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('customer_signout', shop_id=shop.shop_id) }}">Not {{ cust.customer_name.split()[0] }}?</a>{% endif %}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6 d-flex flex-column gap-3">
+    <div>
+      <h1 class="h4 fw-bold mb-1">Order from {{ shop.shop_name }}</h1>
+      <p class="k-muted small mb-0"><i class="bi bi-geo-alt"></i> {{ shop.area }} · <i class="bi bi-clock"></i> {{ shop.opens }}</p>
+    </div>
+
+    {% if not cust %}
+    <form class="k-card p-3 p-md-4" method="post" action="{{ url_for('customer_signin', shop_id=shop.shop_id) }}">
+      <h2 class="h5 fw-bold">Sign in once</h2>
+      <p class="small k-muted">So {{ shop.owner_name.split()[0] }} knows who's ordering and where to deliver. We'll remember you next time.</p>
+      {% if request.args.error %}<div class="alert alert-danger py-2 small">{{ request.args.error }}</div>{% endif %}
+      <div class="mb-2"><label class="form-label small fw-semibold" for="name">Your name</label><input class="form-control form-control-lg" id="name" name="name" autocomplete="name" required></div>
+      <div class="mb-2"><label class="form-label small fw-semibold" for="phone">Phone number</label><input class="form-control form-control-lg num" id="phone" name="phone" inputmode="numeric" autocomplete="tel" placeholder="10 digits" required></div>
+      <div class="mb-3"><label class="form-label small fw-semibold" for="address">Delivery address <span class="k-muted fw-normal">(optional)</span></label><input class="form-control form-control-lg" id="address" name="address" autocomplete="street-address" placeholder="Flat, building, street"></div>
+      <button class="btn btn-brand btn-lg w-100" type="submit">Continue</button>
+      <p class="small k-muted mt-3 mb-0">Demo customers: try phone <span class="num">9876500001</span> to sign in as Meena.</p>
+    </form>
+    {% else %}
+    <div class="k-card p-3 d-flex align-items-center gap-3">
+      <span class="k-logo" style="width:40px;height:40px;border-radius:50%">{{ cust.customer_name[0] }}</span>
+      <div class="small"><b>Hi {{ cust.customer_name.split()[0] }}</b><br><span class="k-muted">{{ cust.address or 'No address saved' }} · <span class="num">{{ cust.phone }}</span></span></div>
+    </div>
+
+    <form class="k-card p-3 p-md-4" id="orderForm">
+      <h2 class="h5 fw-bold mb-3">What do you need?</h2>
+      <ul class="nav nav-pills nav-fill mode-tabs gap-2 mb-3" role="tablist">
+        <li class="nav-item" role="presentation"><button class="nav-link active w-100" data-mode="photo" type="button" role="tab" aria-selected="true"><i class="bi bi-camera"></i>Photo of list</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link w-100" data-mode="voice" type="button" role="tab" aria-selected="false"><i class="bi bi-mic"></i>Voice note</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link w-100" data-mode="text" type="button" role="tab" aria-selected="false"><i class="bi bi-chat-left-text"></i>Type it</button></li>
+      </ul>
+
+      <div data-pane="photo">
+        <label class="drop" for="photo" id="photoDrop">
+          <i class="bi bi-image fs-1 k-muted"></i>
+          <div class="fw-semibold">Take or choose a photo of your list</div>
+          <div class="small k-muted">Messy handwriting is fine</div>
+        </label>
+        <input class="d-none" type="file" id="photo" accept="image/*" capture="environment">
+      </div>
+
+      <div data-pane="voice" hidden>
+        <div class="text-center py-2">
+          <button class="rec" type="button" id="recBtn" aria-label="Start recording"><i class="bi bi-mic-fill"></i></button>
+          <div class="fw-semibold mt-2" id="recLabel">Tap to record your order</div>
+          <div class="small k-muted num" id="recTime">Any language is fine</div>
+          <audio controls class="w-100 mt-3" id="recPlayback" hidden></audio>
+          <label class="small mt-3 d-block">or <a href="#" id="audioPick">upload a voice note</a></label>
+          <input class="d-none" type="file" id="audioFile" accept="audio/*">
+        </div>
+      </div>
+
+      <div data-pane="text" hidden>
+        <label class="form-label small fw-semibold" for="orderText">Your list</label>
+        <textarea class="form-control" id="orderText" rows="5" placeholder="e.g. 2 milk, 1 bread, onion 2kg, atta"></textarea>
+      </div>
+
+      <label class="form-label small fw-semibold mt-3" for="note">Note for the shop <span class="k-muted fw-normal">(optional)</span></label>
+      <input class="form-control" id="note" placeholder="e.g. deliver after 6 pm">
+
+      <button class="btn btn-brand btn-lg w-100 mt-3" type="submit" id="sendBtn">
+        <span class="spinner-border spinner-border-sm me-2" hidden id="sendSpin" aria-hidden="true"></span><span id="sendLabel">Send order</span>
+      </button>
+      {% if not ai %}<p class="small k-muted mt-2 mb-0"><i class="bi bi-info-circle"></i> This shop can only read typed orders right now.</p>{% endif %}
+    </form>
+
+    {% if recent %}
+    <div class="k-card p-3">
+      <p class="k-eyebrow mb-2">Your recent orders here</p>
+      <div class="list-group list-group-flush">
+        {% for r in recent %}
+        <a class="list-group-item list-group-item-action d-flex justify-content-between px-0" style="background:transparent;color:inherit" href="{{ url_for('order_status', shop_id=shop.shop_id, oid=r.order_id|int) }}">
+          <span>#{{ r.order_id|int }} <small class="k-muted">· {{ r.created_at|ago }}</small></span>
+          <span><span class="small k-muted me-2">{{ states[r.order_state] }}</span><b class="num">{{ r.total|rs }}</b></span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+{% if cust %}
+<script src="{{ url_for('static', filename='recorder.js') }}"></script>
+<script>
+let mode = 'photo', photo = null, audio = null, audioName = 'voice.wav';
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll('[data-mode]').forEach(x => { x.classList.toggle('active', x === b); x.setAttribute('aria-selected', x === b); });
+  document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== mode);
+});
+document.getElementById('photo').onchange = e => {
+  photo = e.target.files[0]; if (!photo) return;
+  const url = URL.createObjectURL(photo);
+  document.getElementById('photoDrop').innerHTML = `<img src="${url}" alt="Your list"><div class="small k-muted mt-2">Tap to change photo</div>`;
+};
+
+const rec = new WavRecorder(), recBtn = document.getElementById('recBtn');
+let timer;
+function setAudio(blob, name){
+  audio = blob; audioName = name;
+  const p = document.getElementById('recPlayback'); p.src = URL.createObjectURL(blob); p.hidden = false;
+}
+recBtn.onclick = async () => {
+  if (!rec.recording) {
+    try { await rec.start(); } catch { return toast('Microphone not available. Upload a voice note instead.', true); }
+    recBtn.classList.add('on'); recBtn.innerHTML = '<i class="bi bi-stop-fill"></i>'; recBtn.setAttribute('aria-label', 'Stop recording');
+    document.getElementById('recLabel').textContent = 'Recording… tap to stop';
+    const t0 = Date.now();
+    timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); document.getElementById('recTime').textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; if (s >= 120) recBtn.click(); }, 250);
+  } else {
+    clearInterval(timer);
+    setAudio(await rec.stop(), 'voice.wav');
+    recBtn.classList.remove('on'); recBtn.innerHTML = '<i class="bi bi-mic-fill"></i>'; recBtn.setAttribute('aria-label', 'Record again');
+    document.getElementById('recLabel').textContent = 'Got it. Listen back, or tap to record again';
+  }
+};
+document.getElementById('audioPick').onclick = e => { e.preventDefault(); document.getElementById('audioFile').click(); };
+document.getElementById('audioFile').onchange = e => { const f = e.target.files[0]; if (f) { setAudio(f, f.name); document.getElementById('recLabel').textContent = f.name; } };
+
+document.getElementById('orderForm').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append('shop_id', {{ shop.shop_id|tojson }}); fd.append('channel', mode); fd.append('note', document.getElementById('note').value);
+  if (mode === 'photo') { if (!photo) return toast('Add a photo of your list first.', true); fd.append('file', photo); }
+  if (mode === 'voice') { if (!audio) return toast('Record or upload a voice note first.', true); fd.append('file', audio, audioName); }
+  if (mode === 'text') { const t = document.getElementById('orderText').value.trim(); if (!t) return toast('Type your list first.', true); fd.append('text', t); }
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true; document.getElementById('sendSpin').hidden = false;
+  document.getElementById('sendLabel').textContent = mode === 'text' ? 'Making your bill…' : 'Reading your order…';
+  try {
+    const r = await fetch('/api/process-order', {method: 'POST', body: fd});
+    const j = await r.json().catch(() => ({ok: false, message: 'Something went wrong on the server.'}));
+    if (!j.ok) throw new Error(j.message);
+    location.href = j.redirect;
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false; document.getElementById('sendSpin').hidden = true; document.getElementById('sendLabel').textContent = 'Send order';
+  }
+};
+</script>
+{% endif %}
+{% endblock %}

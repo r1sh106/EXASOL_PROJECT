@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Order #{{ o.order_id|int }} · {{ shop.shop_name }}{% endblock %}
+{% block brand_href %}{{ url_for('dashboard') }}{% endblock %}
+{% block brand %}{{ shop.shop_name }}{% endblock %}
+{% block nav %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('dashboard') }}"><i class="bi bi-arrow-left"></i> Queue</a>{% endblock %}
+{% block content %}
+{% set pills = {"pending": "pill-attn", "ready": "pill-brand", "completed": "pill-ok", "cancelled": "pill-mute"} %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h1 class="h4 fw-bold mb-1">Order #{{ o.order_id|int }} <span class="pill {{ pills[o.order_state] }} align-middle" id="statePill">{{ o.state_label }}</span></h1>
+    <p class="k-muted mb-0 small">Received {{ o.created_at|ago }} by {{ o.channel }} · read by {{ o.parsed_by }}</p>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-lg-8">
+    <div class="k-card p-3">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <h2 class="h5 fw-bold mb-0">Itemised bill</h2>
+        <span class="small k-muted">Switch off anything you don't have. The customer sees it as unavailable.</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table bill mb-0 mt-2" id="bill">
+          <thead><tr class="small k-muted"><th>Item</th><th class="text-end">Qty</th><th class="text-end">Amount</th><th class="text-end">Stock</th></tr></thead>
+          <tbody>
+          {% for i in o["items"] %}
+            <tr class="{{ 'out' if not i.available }}" data-item="{{ i.item_id|int }}">
+              <td>
+                <div class="iname fw-semibold">{{ i.item_name }}</div>
+                <div class="raw">“{{ i.raw_text }}”{% if i.unit %} · {{ i.unit }}{% endif %}{% if i.unit_price is not none %} · {{ i.unit_price|rs }} each{% endif %}</div>
+                {% if i.match_note %}<span class="pill {{ 'pill-mute' if i.product_id is none else 'pill-bad' }} mt-1 note">{{ i.match_note }}</span>{% endif %}
+              </td>
+              <td class="text-end num">{{ i.qty|qty }}</td>
+              <td class="text-end num amount">{{ i.line_total|rs if i.unit_price is not none and i.available else '—' }}</td>
+              <td class="text-end">
+                {% if i.product_id is not none %}
+                <div class="form-check form-switch d-inline-block m-0">
+                  <input class="form-check-input" type="checkbox" role="switch" id="av-{{ i.item_id|int }}" data-avail="{{ i.item_id|int }}" {% if i.available %}checked{% endif %} {% if o.order_state in ('completed','cancelled') %}disabled{% endif %}>
+                  <label class="form-check-label small visually-hidden" for="av-{{ i.item_id|int }}">In stock</label>
+                </div>
+                {% else %}<span class="small k-muted">—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+          <tfoot><tr><td colspan="2">Total</td><td class="text-end num" id="total">{{ o.total|rs }}</td><td></td></tr></tfoot>
+        </table>
+      </div>
+      <div class="d-flex flex-wrap gap-2 mt-3" id="actions">
+        {% if o.order_state == 'pending' %}
+          <button class="btn btn-brand" data-state="ready"><i class="bi bi-box-seam me-1"></i>Confirm &amp; send to packing</button>
+          <button class="btn btn-outline-secondary" data-state="cancelled">Cancel order</button>
+        {% elif o.order_state == 'ready' %}
+          <button class="btn btn-brand" data-state="completed"><i class="bi bi-check2-circle me-1"></i>Packed &amp; delivered</button>
+          <button class="btn btn-outline-secondary" data-state="cancelled">Cancel order</button>
+        {% else %}
+          <span class="k-muted small">This order is {{ o.state_label|lower }}.</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4 d-flex flex-column gap-3">
+    <div class="k-card p-3">
+      <p class="k-eyebrow mb-1">Customer</p>
+      <b>{{ o.customer_name }}</b>
+      <div class="small k-muted num">{{ o.phone }}</div>
+      <div class="small">{{ o.address or 'No address given' }}</div>
+      {% if o.customer_note %}<div class="alert small mt-2 mb-0 py-2" style="background:var(--k-attn-soft);color:var(--k-attn);border:0"><i class="bi bi-sticky me-1"></i>{{ o.customer_note }}</div>{% endif %}
+    </div>
+    <div class="k-card p-3">
+      <p class="k-eyebrow mb-2">What the customer sent</p>
+      {% if o.upload_file and o.channel == 'photo' %}
+        <a href="{{ url_for('upload', name=o.upload_file) }}" target="_blank" rel="noopener"><img class="paper-photo" src="{{ url_for('upload', name=o.upload_file) }}" alt="Customer's handwritten list"></a>
+      {% elif o.upload_file %}
+        <audio controls class="w-100" src="{{ url_for('upload', name=o.upload_file) }}"></audio>
+      {% endif %}
+      {% if o.transcript %}
+        <p class="small k-muted mt-2 mb-1">{{ 'Read as' if o.upload_file else 'Message' }}</p>
+        <p class="mb-0" style="white-space:pre-line">{{ o.transcript }}</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const rs = n => '₹' + Number(n).toLocaleString('en-IN');
+document.querySelectorAll('[data-avail]').forEach(sw => sw.onchange = async () => {
+  sw.disabled = true;
+  try {
+    const r = await postJSON(`/api/orders/{{ o.order_id|int }}/items/${sw.dataset.avail}/availability`, {available: sw.checked});
+    for (const i of r.order.items) {
+      const row = document.querySelector(`[data-item="${i.item_id}"]`); if (!row) continue;
+      row.classList.toggle('out', !i.available);
+      if (i.price !== null) row.querySelector('.amount').textContent = i.available ? rs(i.line_total) : '—';
+      let note = row.querySelector('.note');
+      if (i.note && !note) { note = document.createElement('span'); note.className = 'pill pill-bad mt-1 note'; row.cells[0].appendChild(note); }
+      if (note) { note.textContent = i.note || ''; note.hidden = !i.note; }
+    }
+    document.getElementById('total').textContent = rs(r.order.total);
+    toast(sw.checked ? 'Marked in stock' : 'Marked out of stock. The customer will see it.');
+  } catch { sw.checked = !sw.checked; }
+  sw.disabled = false;
+});
+document.querySelectorAll('#actions [data-state]').forEach(b => b.onclick = async () => {
+  b.disabled = true;
+  try { await postJSON(`/api/orders/{{ o.order_id|int }}/state`, {state: b.dataset.state}); location.href = {{ url_for('dashboard')|tojson }}; }
+  catch { b.disabled = false; }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Order #{{ o.order_id|int }} · {{ shop.shop_name }}{% endblock %}
+{% block brand_href %}{{ url_for('shop_page', shop_id=shop.shop_id) }}{% endblock %}
+{% block brand %}{{ shop.shop_name }}{% endblock %}
+{% block nav %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('shop_page', shop_id=shop.shop_id) }}">New order</a>{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-md-8 col-lg-6 d-flex flex-column gap-3">
+    <div class="k-card p-3 p-md-4">
+      <div class="d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <h1 class="h4 fw-bold mb-1">Order #{{ o.order_id|int }}</h1>
+          <p class="small k-muted mb-0">Sent {{ o.created_at|ago }} to {{ shop.shop_name }}</p>
+        </div>
+        <span class="pill pill-brand" id="stateLabel">{{ o.state_label }}</span>
+      </div>
+      <ol class="steps mt-3" id="steps">
+        <li data-s="pending">Sent</li><li data-s="checked">Checked by shop</li><li data-s="ready">Being packed</li><li data-s="completed">Delivered</li>
+      </ol>
+      <p class="small mt-3 mb-0" id="stateText"></p>
+    </div>
+
+    <div class="alert mb-0" id="unavail" style="background:var(--k-bad-soft);color:var(--k-bad);border:0" hidden></div>
+
+    <div class="k-card p-3 p-md-4">
+      <h2 class="h5 fw-bold">Your bill</h2>
+      <div class="table-responsive">
+        <table class="table bill mb-0">
+          <tbody id="rows"></tbody>
+          <tfoot><tr><td>Total</td><td></td><td class="text-end num" id="total"></td></tr></tfoot>
+        </table>
+      </div>
+      <p class="small k-muted mt-2 mb-0">Prices are from {{ shop.shop_name }}. Pay {{ shop.owner_name.split()[0] }} on delivery.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const rs = n => '₹' + Number(n).toLocaleString('en-IN');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const TEXT = {
+  pending: 'The shop has your order and will check it shortly.',
+  ready: 'The shop checked your order and is packing it now.',
+  completed: 'Your order was packed and handed over. Thank you!',
+  cancelled: 'The shop cancelled this order. Call them if you have questions.',
+};
+function render(o){
+  document.getElementById('stateLabel').textContent = o.state_label;
+  document.getElementById('stateText').textContent = TEXT[o.state];
+  const order = ['pending', 'checked', 'ready', 'completed'];
+  const at = o.state === 'pending' ? 0 : o.state === 'ready' ? 2 : o.state === 'completed' ? 4 : -1;
+  document.querySelectorAll('#steps li').forEach((li, i) => li.className = i < at || (i === 0 && at >= 0) ? 'done' : i === at ? 'now' : '');
+  document.getElementById('rows').innerHTML = o.items.map(i => `
+    <tr class="${i.available ? '' : 'out'}">
+      <td><div class="iname fw-semibold">${esc(i.name)}</div><div class="raw">${i.unit ? esc(i.unit) : ''}${i.price !== null ? ' · ' + rs(i.price) + ' each' : ''}</div>
+        ${i.available ? '' : `<span class="pill pill-bad mt-1">${esc(i.note || 'Not available')}</span>`}</td>
+      <td class="text-end num">× ${i.qty}</td>
+      <td class="text-end num">${i.available ? rs(i.line_total) : '—'}</td>
+    </tr>`).join('');
+  document.getElementById('total').textContent = rs(o.total);
+  const out = o.items.filter(i => !i.available);
+  const box = document.getElementById('unavail');
+  box.hidden = !out.length;
+  box.innerHTML = out.length ? `<i class="bi bi-exclamation-circle me-1"></i><b>Sorry, ${out.length === 1 ? 'this item is' : 'these items are'} not available:</b> ${out.map(i => `${esc(i.name)} (${esc((i.note || 'not available').toLowerCase())})`).join(', ')}. ${out.length === 1 ? 'It is' : 'They are'} not in your total.` : '';
+}
+render({{ {'state': o.order_state, 'state_label': o.state_label, 'total': o.total|float, 'items': []}|tojson }});
+async function poll(){
+  const r = await fetch('/api/orders/{{ o.order_id|int }}'); if (r.ok) render(await r.json());
+}
+poll(); setInterval(poll, 5000);
+</script>
+{% endblock %}

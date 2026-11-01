@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Merchant sign in · KNODE{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7 col-lg-5">
+    <div class="k-card p-4">
+      <h1 class="h4 fw-bold">Open your shop's dashboard</h1>
+      <p class="k-muted small">Demo sign-in: pick your shop. A real version would use the owner's phone number and a one-time code.</p>
+      <form method="post" class="d-grid gap-2">
+        {% for s in shops %}
+        <input class="btn-check" type="radio" name="shop_id" id="s{{ loop.index }}" value="{{ s.shop_id }}" {% if loop.first %}checked{% endif %}>
+        <label class="btn btn-outline-secondary text-start p-3" for="s{{ loop.index }}" style="color:var(--k-ink)">
+          <b>{{ s.shop_name }}</b><br><small class="k-muted">{{ s.owner_name }} · {{ s.area }}</small>
+        </label>
+        {% endfor %}
+        <button class="btn btn-brand btn-lg mt-2" type="submit">Open dashboard</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

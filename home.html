@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4 align-items-start">
+  <div class="col-lg-6">
+    <p class="k-eyebrow mb-2">For neighbourhood grocery shops</p>
+    <h1 class="fw-bold" style="text-wrap:balance">Take orders from the street you've served for years.</h1>
+    <p class="k-muted fs-5">Share one link with your customers. They send a photo of their handwritten list or a voice note, and KNODE turns it into a clean bill for you to check and pack.</p>
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <a class="btn btn-brand btn-lg" href="{{ url_for('merchant_signin') }}"><i class="bi bi-shop me-1"></i> Open merchant dashboard</a>
+    </div>
+    {% if not ai %}
+    <div class="alert mt-4 mb-0" style="background:var(--k-attn-soft);color:var(--k-attn);border:0">
+      <i class="bi bi-key me-1"></i> No Gemini API key yet. Typed orders still work; photos and voice notes need <code>GEMINI_API_KEY</code> in <code>.env</code>.
+    </div>
+    {% endif %}
+  </div>
+  <div class="col-lg-6">
+    <div class="k-card p-3 p-md-4">
+      <p class="k-eyebrow">Customer order links</p>
+      <div class="list-group list-group-flush">
+        {% for s in shops %}
+        <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center px-0" style="background:transparent;color:inherit" href="{{ url_for('shop_page', shop_id=s.shop_id) }}">
+          <span><b>{{ s.shop_name }}</b><br><small class="k-muted">{{ s.area }}</small></span>
+          <span class="pill pill-brand">/shop/{{ s.shop_id }} <i class="bi bi-arrow-right"></i></span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    <ol class="k-muted small mt-3 ps-3 mb-0">
+      <li>Shopkeeper shares the shop link with nearby groups and contacts.</li>
+      <li>Customer signs in once and uploads a photo, a voice note, or types the order.</li>
+      <li>Gemini reads it and builds an itemised bill from the shop's catalog.</li>
+      <li>Shopkeeper checks it, marks anything out of stock, and moves it to packing.</li>
+    </ol>
+  </div>
+</div>
+{% endblock %}

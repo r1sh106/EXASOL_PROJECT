@@ -1,82 +1,90 @@
-# KNODE demo
+# KNODE Merchant
 
-Phone ordering for small neighbourhood shops. A customer picks a nearby shop, sends an order as a voice note, text or photo of a list, and the shop's helper bot turns it into a bill. The shop packs it, and credit (khata), stock, profit and the business report update. Phones are simulated in the browser.
+A mobile-friendly web app for neighbourhood grocery shops. The shopkeeper shares a link. Customers open it, sign in once, and send their order as a photo of a handwritten list, a voice note, or typed text. Gemini reads the order and builds an itemised bill from the shop's catalog. The shopkeeper checks the bill, switches off anything out of stock (the customer sees this), and moves the order through the queue.
 
-All shops, products and brands are made up.
+All shops, products and customers are made up.
 
-- **Frontend:** `static/index.html` (plain HTML, CSS and JavaScript)
+**Built with:**
 - **Backend:** Flask (`app.py`)
-- **Database:** Exasol Personal running locally, accessed with the official `pyexasol` driver (`db.py`)
-- **Demo data:** `seed_data.py`
+- **Database:** Exasol Personal running locally, through the official `pyexasol` driver (`db.py`)
+- **AI:** Google Gemini through the official `google-genai` SDK (`gemini.py`), using structured JSON output
+- **Frontend:** Bootstrap 5.3 with Jinja templates (`templates/`, `static/`)
 
-## 1. Install Exasol Personal (local)
+## Pages and routes
 
-Use Exasol's official launcher: https://github.com/exasol/exasol-personal
+| Route | What it is |
+|---|---|
+| `/` | Start page with links |
+| `/merchant/signin` | Demo merchant sign-in (pick a shop) |
+| `/dashboard` | Shop link, order queue (Pending for review / Ready to pack / Completed), daily sales, top-selling items, out-of-stock list |
+| `/dashboard/order/<id>` | Merchant verification screen: itemised bill, in-stock switches, what the customer sent, Confirm / Packed / Cancel |
+| `/shop/<shopID>` | Customer order page: sign in once, then upload a photo, record or upload a voice note, or type |
+| `/shop/<shopID>/order/<id>` | Customer's order status and bill, refreshed every 5 seconds, with unavailable items explained |
+| `POST /api/process-order` | Takes the upload, sends it to Gemini with the shop's catalog, saves the itemised bill as a pending order |
 
-- On Windows, run these in WSL (Ubuntu, AMD64). Linux and WSL need Podman installed.
-- On macOS, you need macOS 15 or later on Apple Silicon.
+Prices always come from the shop's catalog in Exasol, never from the AI. Items the shop doesn't sell are kept on the bill as "Not sold at this shop". Items marked out of stock are left out of the total.
+
+## Setup
+
+### 1. Exasol Personal (local)
+
+Use the official launcher (https://github.com/exasol/exasol-personal). On Windows, run these in WSL Ubuntu with Podman installed:
 
 ```bash
 curl https://downloads.exasol.com/exasol-personal/installer.sh | sh
-exasol version
 exasol install local -d knode
+exasol info -d knode
 ```
 
-`exasol info -d knode` shows the connection details. The database listens on `127.0.0.1:8563` with user `sys`, and the password is in `~/.exasol/personal/deployments/knode/secrets.json`.
+The password is in `~/.exasol/personal/deployments/knode/secrets.json`.
 
-Start and stop the database later with:
-
-```bash
-exasol stop -d knode
-exasol start -d knode
-```
-
-## 2. Set up the app
+### 2. Python packages
 
 ```bash
 pip install -r requirements.txt
-copy .env.example .env      # macOS/Linux: cp .env.example .env
 ```
 
-Put the password from `secrets.json` into `.env` as `EXA_PASSWORD`.
+### 3. Settings
 
-## 3. Load the demo data
+Copy `.env.example` to `.env` and fill in:
+
+- `EXA_PASSWORD`: from `secrets.json`
+- `GEMINI_API_KEY`: free key from https://aistudio.google.com/apikey
+- `GEMINI_MODEL`: defaults to `gemini-3.8-flash`. Change it if Google renames the model.
+- `GEMINI_FALLBACK_MODELS`: tried in order when the main model is overloaded (503) or rate-limited (429). Defaults to `gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest`. The model that read each order is shown on the verification screen.
+- `FLASK_SECRET`: any long random string
+
+Without a Gemini key, typed orders still work through a simple keyword matcher. Photos and voice notes need the key.
+
+### 4. Load demo data, then run
 
 ```bash
 python db.py
-```
-
-This creates the `KNODE` schema and fills it with 7 shops, 54 products, customer credit, regular orders and 6 months of sales. Run it again, or press **Reset demo data** in the app, to start fresh.
-
-## 4. Run
-
-```bash
 python app.py
 ```
 
-Open http://localhost:5000.
+Open http://localhost:5050. To try it from a phone on the same Wi-Fi, start with `HOST=0.0.0.0` and open `http://<your-computer-ip>:5050`. Phones can upload photos and audio files over plain http. Recording in the browser needs https or localhost.
 
-## How to demo it
+## Demo walkthrough
 
-1. Pick a shop in **Shops near Meena**. Shops tagged "Not on Knode yet" can't take phone orders.
-2. Pick one of those and press **Sign up & create helper bot** to put it on Knode.
-3. Send a sample order (voice note, text or photo), or type one. Vague words like "biscuits" or "vegetables" are matched to Meena's usual items at that shop.
-4. Reply "add …" or "remove …", then confirm and choose khata or cash.
-5. On the shop owner's phone, tap **Packed order**. Stock, khata and the report update from Exasol.
-6. Press **+1 hour** to see reminders for regular orders. In the owner's chat, try `report`, `stock milk` or `khata Meena`.
+1. Open **/merchant/signin**, pick New Wave Grocers, and copy the shop link.
+2. Open the link in another browser or a private window. Sign in, for example with phone `9876500001` (Meena).
+3. Send an order: photo, voice note, or typed (e.g. `2 milk, onion 2kg, coffee, paneer, mango pickle`).
+4. Within 5 seconds it appears under **Pending for review** on the dashboard. Open it, switch off an item, and press **Confirm & send to packing**.
+5. The customer's page shows the item as unavailable and the new total. Then press **Packed & delivered**.
 
-## Tables (schema `KNODE`)
+## Troubleshooting
+
+- **"Too many open connections" / Exasol licence limit:** Exasol Personal allows 20 parallel connections. The app keeps a small reusable pool, 4 by default (`EXA_POOL_SIZE` in `.env`). If you run several apps against the same database, keep their pools small, or restart the app to free its connections.
+- **"Can't reach the Exasol database":** start it with `exasol start -d knode` in WSL.
+- **"Gemini is busy right now":** Google's free tier is overloaded. The app already tries the fallback models, so wait a minute and send again.
+
+## Tables (schema `KNODE_SHOP`)
 
 | Table | Holds |
 |---|---|
-| `shops` | Neighbourhood shops, distance, years open, whether they're on Knode |
-| `products` | Products per shop with price, cost, stock and the words customers use for them |
-| `customers`, `purchase_history` | The customer and her usual buys per shop |
-| `khata` | Credit balances per shop |
-| `routines` | Regular orders that trigger reminders |
-| `orders`, `order_items` | Every order from the demo |
-| `monthly_sales`, `top_sellers`, `today_baseline` | Report data |
-
-## Note on certificates
-
-The local Exasol Personal deployment uses a self-signed certificate, and its launcher says to turn off certificate validation. `db.py` does that only when the database address is `127.0.0.1` or `localhost`.
+| `shops` | Shop details |
+| `products` | Catalog per shop: name, unit, price, in stock, keywords |
+| `customers` | Customers who signed in (name, phone, address) |
+| `orders` | One row per order: state, channel, uploaded file, transcript, total, which model read it |
+| `order_items` | Bill lines: what the customer wrote, matched product, quantity, price, available |

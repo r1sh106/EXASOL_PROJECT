@@ -1,2 +1,4 @@
 flask>=3.0
 pyexasol>=0.27
+google-genai>=1.0
+pydantic>=2

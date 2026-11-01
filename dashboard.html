@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ shop.shop_name }}{% endblock %}
+{% block brand_href %}{{ url_for('dashboard') }}{% endblock %}
+{% block brand %}{{ shop.shop_name }}{% endblock %}
+{% block nav %}
+  <span class="d-none d-sm-inline small k-muted">{{ shop.owner_name }}</span>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('merchant_signout') }}">Sign out</a>
+{% endblock %}
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-12 col-xl-7">
+    <div class="k-card p-3 h-100">
+      <p class="k-eyebrow mb-1">Your shop link</p>
+      <p class="small k-muted mb-2">Send this to your building groups and regular customers. Anyone who opens it can send you an order.</p>
+      <div class="input-group">
+        <input class="form-control num" id="shopLink" value="{{ shop_link }}" readonly aria-label="Shop link">
+        <button class="btn btn-brand" type="button" id="copyLink"><i class="bi bi-clipboard"></i><span class="d-none d-sm-inline ms-1">Copy</span></button>
+        <button class="btn btn-soft" type="button" id="shareLink" hidden><i class="bi bi-share"></i><span class="d-none d-sm-inline ms-1">Share</span></button>
+      </div>
+      <a class="small d-inline-block mt-2" href="{{ shop_link }}" target="_blank" rel="noopener">Open as a customer <i class="bi bi-box-arrow-up-right"></i></a>
+    </div>
+  </div>
+  <div class="col-12 col-xl-5">
+    <div class="row g-3 h-100">
+      <div class="col-6"><div class="k-card p-3 h-100 stat"><span class="k-eyebrow">Sales today</span><b>{{ stats.today.sales|rs }}</b><small class="k-muted">{{ stats.today.orders }} completed order{{ '' if stats.today.orders == 1 else 's' }}</small></div></div>
+      <div class="col-6"><div class="k-card p-3 h-100 stat"><span class="k-eyebrow">Open orders</span><b>{{ stats.open }}</b><small class="k-muted">to review or pack</small></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="d-flex justify-content-between align-items-end mb-2">
+  <h2 class="h5 fw-bold mb-0">Order queue</h2>
+  <span class="small k-muted"><span class="spinner-grow spinner-grow-sm text-secondary" style="width:.5rem;height:.5rem" aria-hidden="true"></span> Updates every 5 seconds</span>
+</div>
+<div id="queueWrap">{% include "_queue.html" %}</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-12 col-lg-7">
+    <div class="k-card p-3 h-100">
+      <div class="d-flex justify-content-between align-items-baseline flex-wrap gap-2">
+        <h2 class="h5 fw-bold mb-0">Daily sales</h2>
+        <span class="small k-muted">Completed orders, last 7 days · <b class="num" style="color:var(--k-ink)">{{ stats.week|rs }}</b></span>
+      </div>
+      {% set top = (stats.days|map(attribute='sales')|max) or 1 %}
+      <div class="bars mt-3" role="img" aria-label="Sales for each of the last 7 days">
+        {% for d in stats.days %}
+        <div class="bar {{ 'today' if loop.last }}">
+          <span class="v">{{ (d.sales / 1000)|round(1) }}k</span>
+          <div class="fill" style="height:{{ (d.sales / top * 100)|round(0) }}%"></div>
+          <small>{{ d.label }}</small>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-5">
+    <div class="k-card p-3 h-100">
+      <div class="d-flex justify-content-between align-items-center">
+        <h2 class="h5 fw-bold mb-0">Top-selling items</h2>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Period">
+          <input type="radio" class="btn-check" name="topPeriod" id="tpToday" checked>
+          <label class="btn btn-outline-secondary" for="tpToday">Today</label>
+          <input type="radio" class="btn-check" name="topPeriod" id="tpWeek">
+          <label class="btn btn-outline-secondary" for="tpWeek">7 days</label>
+        </div>
+      </div>
+      {% for key, rows in [("today", stats.top_today), ("week", stats.top_week)] %}
+      <div class="toprow mt-3" id="top-{{ key }}" {% if key == 'week' %}hidden{% endif %}>
+        {% set best = (rows|map(attribute='sales')|map('float')|max) if rows else 1 %}
+        {% for r in rows %}
+        <div class="mb-2">
+          <div class="d-flex justify-content-between small"><span><b>{{ r.item_name }}</b> <span class="k-muted">· {{ r.units|qty }} sold</span></span><span class="num fw-bold">{{ r.sales|rs }}</span></div>
+          <div class="progress mt-1" role="presentation"><div class="progress-bar" style="width:{{ (r.sales|float / best * 100)|round(0) }}%"></div></div>
+        </div>
+        {% else %}
+        <p class="k-muted small mb-0">No completed orders {{ 'today' if key == 'today' else 'this week' }} yet.</p>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="k-card p-3 mt-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <h2 class="h5 fw-bold mb-0">Out of stock</h2>
+    <span class="small k-muted">Customers are told these aren't available. Switch on when restocked.</span>
+  </div>
+  <ul class="list-unstyled mb-0 mt-2" id="oos">
+    {% for p in out_of_stock %}
+    <li class="d-flex justify-content-between align-items-center py-2 border-top">
+      <span>{{ p.product_name }} <small class="k-muted">· {{ p.unit }}</small></span>
+      <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" id="r-{{ p.product_id }}" data-restock="{{ p.product_id }}"><label class="form-check-label small" for="r-{{ p.product_id }}">In stock</label></div>
+    </li>
+    {% else %}
+    <li class="k-muted small py-2">Everything is in stock.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-4 small k-muted">
+  <span><i class="bi bi-database"></i> Data in Exasol Personal on this computer · Order reading: {{ model if ai else 'no Gemini key, typed orders only' }}</span>
+  <button class="btn btn-sm btn-outline-secondary" id="reset" type="button">Reset demo data</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const link = document.getElementById('shopLink');
+document.getElementById('copyLink').onclick = async () => {
+  try { await navigator.clipboard.writeText(link.value); toast('Link copied'); }
+  catch { link.select(); toast('Press Ctrl+C to copy'); }
+};
+if (navigator.share) {
+  const b = document.getElementById('shareLink'); b.hidden = false;
+  b.onclick = () => navigator.share({title: {{ shop.shop_name|tojson }}, text: 'Send your grocery order to {{ shop.shop_name }} here:', url: link.value}).catch(() => {});
+}
+for (const [id, key] of [['tpToday','today'], ['tpWeek','week']])
+  document.getElementById(id).onchange = () => { for (const k of ['today','week']) document.getElementById('top-' + k).hidden = k !== key; };
+document.querySelectorAll('[data-restock]').forEach(sw => sw.onchange = async () => {
+  await postJSON(`/api/products/${sw.dataset.restock}/stock`, {in_stock: sw.checked});
+  toast(sw.checked ? 'Marked in stock' : 'Marked out of stock');
+});
+document.getElementById('reset').onclick = async () => {
+  const b = document.getElementById('reset');
+  if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Click again to reset'; return; }
+  b.disabled = true; b.textContent = 'Resetting…';
+  await postJSON('/api/reset'); location.reload();
+};
+// poll the queue so new customer orders appear without a reload
+let known = new Set(document.getElementById('queue').dataset.ids.split(',').filter(Boolean));
+setInterval(async () => {
+  const r = await fetch('/dashboard/queue'); if (!r.ok) return;
+  const wrap = document.getElementById('queueWrap'); wrap.innerHTML = await r.text();
+  const ids = document.getElementById('queue').dataset.ids.split(',').filter(Boolean);
+  const fresh = ids.filter(i => !known.has(i));
+  fresh.forEach(i => wrap.querySelector(`[data-id="${i}"]`)?.classList.add('q-new'));
+  if (fresh.length) toast(fresh.length === 1 ? 'New order received' : `${fresh.length} new orders`);
+  known = new Set(ids);
+}, 5000);
+</script>
+{% endblock %}

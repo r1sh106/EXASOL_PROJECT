@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Problem · KNODE{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-7 col-lg-5">
+    <div class="k-card p-4 text-center">
+      <i class="bi bi-exclamation-circle fs-1" style="color:var(--k-attn)"></i>
+      <h1 class="h5 fw-bold mt-2">{{ message }}</h1>
+      <div class="d-flex gap-2 justify-content-center mt-3">
+        <button class="btn btn-brand" type="button" onclick="location.reload()">Try again</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('home') }}">Home</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

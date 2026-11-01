@@ -1,363 +1,382 @@
-"""Knode demo backend: Flask API over a local Exasol Personal database."""
-import html
+"""KNODE Merchant: Flask app for neighbourhood grocery orders, backed by local Exasol Personal and Gemini."""
+import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import wraps
+from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 
 import db
-import seed_data
-from db import q, q1
+import gemini
+from db import num, q, q1
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "dev-only-secret")
+app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
 app.teardown_appcontext(db.release_request_connection)
-CUSTOMER_ID, CUSTOMER_NAME = "C1", "Meena"
-NUMW = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "ten": 10, "half": 0.5}
+UPLOADS = Path(__file__).parent / "uploads"
+UPLOADS.mkdir(exist_ok=True)
+STATES = {"pending": "Pending review", "ready": "Ready to pack", "completed": "Completed", "cancelled": "Cancelled"}
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif"}
+AUDIO_TYPES = {"audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/mp4": "m4a",
+               "audio/x-m4a": "m4a", "audio/aac": "aac", "audio/ogg": "ogg", "audio/flac": "flac"}
 
 
-def num(v):
-    f = float(v or 0)
-    return int(f) if f.is_integer() else round(f, 2)
+# ---------- helpers ----------
+
+def ago(ts):
+    if isinstance(ts, str):
+        ts = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+    mins = int((datetime.now() - ts).total_seconds() // 60)
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{mins} min ago"
+    if mins < 24 * 60:
+        return f"{mins // 60} h ago"
+    return ts.strftime("%d %b")
 
 
-def err(msg, code=400):
-    return jsonify(ok=False, message=msg), code
+def as_dt(ts):
+    return datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S") if isinstance(ts, str) else ts
 
 
-# ---------- order understanding ----------
-
-def has(seg, word):
-    return re.search(r"\b" + re.escape(word) + r"\b", seg) is not None
-
-
-def keywords(p):
-    return [w.strip() for w in (p["aliases"] or "").split(",") + (p["cat_words"] or "").split(",") if w.strip()]
+app.jinja_env.filters["ago"] = ago
+app.jinja_env.filters["rs"] = lambda v: "₹" + f"{num(v):,}"
+app.jinja_env.filters["qty"] = lambda v: f"{num(v):g}"
 
 
-def read_qty(seg, p):
-    for w in sorted(keywords(p), key=len, reverse=True):  # so "a4 paper" is not read as 4
-        seg = re.sub(r"\b" + re.escape(w) + r"\b", " ", seg)
-    s = re.sub(r"\b(an?|one|two|three|four|five|six|ten|half)\b", lambda m: str(NUMW[m.group(0)]), seg)
-    u = re.search(r"(\d+(?:\.\d+)?)\s*(kgs?|g|gm|grams?|ml|l|ltr|litres?|liters?|m|metres?|meters?)\b", s)
-    if u:  # "2kg onion" = 2 packs of 1kg; "atta 5kg" = 1 pack of 5kg
-        return float(u.group(1)) if re.search(r"\b1\s?(kg|l|litre|metre)\b", p["product_name"], re.I) else 1
-    n = re.search(r"\d+(?:\.\d+)?", s)
-    return float(n.group(0)) if n else None
+def merchant_required(view):
+    @wraps(view)
+    def wrapped(*a, **kw):
+        if "shop_id" not in session:
+            return redirect(url_for("merchant_signin", next=request.path))
+        return view(*a, **kw)
+    return wrapped
 
 
-def parse(text, shop_id):
-    prods = q("SELECT * FROM products WHERE shop_id = {} ORDER BY product_id", shop_id)
-    byid = {p["product_id"]: p for p in prods}
-    hist = {}
-    for h in q("SELECT cat, product_id, usual_qty FROM purchase_history WHERE customer_id = {} AND shop_id = {}", CUSTOMER_ID, shop_id):
-        hist.setdefault(h["cat"], []).append(h)
-    aliases = sorted({(a.strip(), p["product_id"]) for p in prods for a in (p["aliases"] or "").split(",") if a.strip()}, key=lambda x: -len(x[0]))
-    catw = sorted({(w.strip(), p["cat"]) for p in prods for w in p["cat_words"].split(",") if w.strip()}, key=lambda x: -len(x[0]))
-    out = []
-    for seg in re.split(r",|\n|\.(?!\d)|;|&|\band\b|\bplus\b|\balso\b", text.lower()):
-        hit = next((pid for a, pid in aliases if has(seg, a)), None)
-        if hit:
-            qty = read_qty(seg, byid[hit])
-            out.append({"product_id": hit, "qty": qty or 1, "note": ""})
-            continue
-        cat = next((c for w, c in catw if has(seg, w)), None)
-        if not cat:
-            continue
-        h = hist.get(cat)
-        if h and len(h) > 1:  # e.g. "vegetables" = her usual onion, tomato, potato
-            out += [{"product_id": x["product_id"], "qty": num(x["usual_qty"]), "note": "usual items · from past orders"} for x in h]
-            continue
-        in_cat = [p for p in prods if p["cat"] == cat]
-        pid = h[0]["product_id"] if h else in_cat[0]["product_id"]
-        qty = read_qty(seg, byid[pid])
-        if h:
-            note = ("usual brand & qty" if qty is None else "usual brand") + " · from past orders"
-        else:
-            note = "shop's most popular · no past orders yet" if len(in_cat) > 1 else ""
-        out.append({"product_id": pid, "qty": qty if qty is not None else (num(h[0]["usual_qty"]) if h else 1), "note": note})
-    merged = {}
-    for line in out:
-        if line["product_id"] in merged:
-            merged[line["product_id"]]["qty"] += line["qty"]
-        else:
-            merged[line["product_id"]] = dict(line)
-    return list(merged.values())
+def current_shop():
+    return q1("SELECT * FROM shops WHERE shop_id = {}", session.get("shop_id"))
 
 
-# ---------- orders ----------
-
-def recompute(order_id):
-    q("""UPDATE orders SET total = (SELECT COALESCE(SUM(qty * unit_price), 0) FROM order_items WHERE order_id = {0}),
-                           profit = (SELECT COALESCE(SUM(qty * (unit_price - unit_cost)), 0) FROM order_items WHERE order_id = {0})
-         WHERE order_id = {0}""", order_id)
+def current_customer():
+    cid = session.get("customer_id")
+    return q1("SELECT * FROM customers WHERE customer_id = {}", cid) if cid else None
 
 
-def add_items(order_id, lines):
-    for line in lines:
-        row = q1("SELECT qty FROM order_items WHERE order_id = {} AND product_id = {}", order_id, line["product_id"])
-        if row:
-            q("UPDATE order_items SET qty = qty + {} WHERE order_id = {} AND product_id = {}", line["qty"], order_id, line["product_id"])
-        else:
-            q("""INSERT INTO order_items SELECT {}, product_id, {}, price, cost, {} FROM products WHERE product_id = {}""",
-              order_id, line["qty"], line["note"], line["product_id"])
-    recompute(order_id)
-
-
-def new_order_id():
-    return num(q1("SELECT COALESCE(MAX(order_id), 1041) + 1 AS n FROM orders")["n"])
-
-
-def bill(order_id):
-    o = q1("SELECT o.*, s.shop_name FROM orders o JOIN shops s ON s.shop_id = o.shop_id WHERE order_id = {}", order_id)
+def load_order(oid):
+    o = q1("""SELECT o.*, c.customer_name, c.phone, c.address, s.shop_name FROM orders o
+              JOIN customers c ON c.customer_id = o.customer_id JOIN shops s ON s.shop_id = o.shop_id
+              WHERE o.order_id = {}""", oid)
     if not o:
         return None
-    items = q("""SELECT i.product_id, p.product_name, i.qty, i.unit_price, i.note, p.stock FROM order_items i
-                 JOIN products p ON p.product_id = i.product_id WHERE i.order_id = {} ORDER BY p.product_id""", order_id)
+    o["items"] = q("SELECT * FROM order_items WHERE order_id = {} ORDER BY line_no", oid)
+    for i in o["items"]:
+        i["line_total"] = num(float(i["qty"]) * float(i["unit_price"])) if i["unit_price"] is not None and i["available"] else 0
+    o["state_label"] = STATES[o["order_state"]]
+    return o
+
+
+def can_view(o):
+    return o and (session.get("shop_id") == o["shop_id"] or session.get("customer_id") == num(o["customer_id"]))
+
+
+def recompute(oid):
+    q("""UPDATE orders SET updated_at = {1}, total = (SELECT COALESCE(SUM(qty * unit_price), 0) FROM order_items
+         WHERE order_id = {0} AND available AND unit_price IS NOT NULL) WHERE order_id = {0}""", oid, datetime.now().replace(microsecond=0))
+
+
+def order_json(o):
     return {
-        "order_id": num(o["order_id"]), "shop_id": o["shop_id"], "shop_name": o["shop_name"], "state": o["order_state"],
-        "pay_mode": o["pay_mode"], "total": num(o["total"]), "profit": num(o["profit"]), "customer": o["customer_name"],
-        "lines": [{"name": i["product_name"], "qty": num(i["qty"]), "amount": num(float(i["qty"]) * float(i["unit_price"])),
-                   "note": i["note"] or "", "short": float(i["qty"]) > float(i["stock"]), "stock": num(i["stock"])} for i in items],
+        "order_id": num(o["order_id"]), "state": o["order_state"], "state_label": o["state_label"], "total": num(o["total"]),
+        "items": [{"item_id": num(i["item_id"]), "name": i["item_name"], "raw": i["raw_text"], "qty": num(i["qty"]), "unit": i["unit"],
+                   "price": num(i["unit_price"]) if i["unit_price"] is not None else None, "line_total": i["line_total"],
+                   "available": bool(i["available"]), "matched": i["product_id"] is not None, "note": i["match_note"]} for i in o["items"]],
     }
 
 
-def sell(order_id):
-    """Take stock out and put a khata order on the customer's account."""
-    o = q1("SELECT shop_id, customer_name, pay_mode, total FROM orders WHERE order_id = {}", order_id)
-    for i in q("SELECT product_id, qty FROM order_items WHERE order_id = {}", order_id):
-        q("UPDATE products SET stock = GREATEST(stock - {}, 0) WHERE product_id = {}", i["qty"], i["product_id"])
-    q("UPDATE orders SET order_state = 'packed', packed_at = {} WHERE order_id = {}", now(), order_id)
-    if o["pay_mode"] == "khata":
-        if not q1("SELECT 1 AS x FROM khata WHERE shop_id = {} AND customer_name = {}", o["shop_id"], o["customer_name"]):
-            q("INSERT INTO khata VALUES ({}, {}, 0, 0)", o["shop_id"], o["customer_name"])
-        q("UPDATE khata SET balance = balance + {} WHERE shop_id = {} AND customer_name = {}", o["total"], o["shop_id"], o["customer_name"])
+def dashboard_data(shop_id):
+    orders = q("""SELECT o.order_id, o.order_state, o.channel, o.total, o.created_at, c.customer_name,
+                  (SELECT COUNT(*) FROM order_items i WHERE i.order_id = o.order_id) AS n_items,
+                  (SELECT COUNT(*) FROM order_items i WHERE i.order_id = o.order_id AND NOT i.available) AS n_out
+                  FROM orders o JOIN customers c ON c.customer_id = o.customer_id
+                  WHERE o.shop_id = {} AND (o.order_state IN ('pending', 'ready') OR o.created_at >= {})
+                  ORDER BY o.created_at DESC""", shop_id, datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    queue = {k: [o for o in orders if o["order_state"] == k] for k in ("pending", "ready", "completed")}
+    return queue
 
 
-def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def stats(shop_id):
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    days = []
+    for d in range(6, -1, -1):
+        start = today - timedelta(days=d)
+        r = q1("""SELECT COALESCE(SUM(total), 0) AS s, COUNT(*) AS n FROM orders
+                  WHERE shop_id = {} AND order_state = 'completed' AND created_at >= {} AND created_at < {}""", shop_id, start, start + timedelta(days=1))
+        days.append({"label": "Today" if d == 0 else start.strftime("%a"), "sales": num(r["s"]), "orders": num(r["n"])})
+    def top(since):
+        return q("""SELECT i.item_name, SUM(i.qty) AS units, SUM(i.qty * i.unit_price) AS sales FROM order_items i
+                    JOIN orders o ON o.order_id = i.order_id
+                    WHERE o.shop_id = {} AND o.order_state = 'completed' AND i.available AND i.unit_price IS NOT NULL AND o.created_at >= {}
+                    GROUP BY i.item_name ORDER BY sales DESC LIMIT 5""", shop_id, since)
+    open_orders = q1("SELECT COUNT(*) AS n FROM orders WHERE shop_id = {} AND order_state IN ('pending', 'ready')", shop_id)["n"]
+    return {"days": days, "today": days[-1], "week": sum(d["sales"] for d in days), "open": num(open_orders),
+            "top_today": top(today), "top_week": top(today - timedelta(days=6))}
 
 
-# ---------- reports ----------
-
-def today(shop_id):
-    b = q1("SELECT * FROM today_baseline WHERE shop_id = {}", shop_id)
-    t = q1("""SELECT COALESCE(SUM(total), 0) AS sales, COALESCE(SUM(profit), 0) AS profit, COUNT(*) AS n
-              FROM orders WHERE shop_id = {} AND order_state = 'packed'""", shop_id)
-    return {"sales": num(b["sales"]) + num(t["sales"]), "profit": num(b["profit"]) + num(t["profit"]),
-            "orders": num(b["order_count"]) + num(t["n"]), "phone": num(t["n"])}
-
-
-def health(shop_id, clock):
-    m = q("SELECT * FROM monthly_sales WHERE shop_id = {} ORDER BY month_start", shop_id)
-    prev, cur = m[-2], m[-1]
-    growth = float(cur["sales"]) / float(prev["sales"]) - 1
-    margin = float(cur["profit"]) / float(cur["sales"])
-    owed = num(q1("SELECT COALESCE(SUM(balance), 0) AS b FROM khata WHERE shop_id = {}", shop_id)["b"])
-    old = q("SELECT customer_name, balance, days_open FROM khata WHERE shop_id = {} AND balance > 0 AND days_open > 30", shop_id)
-    low = q("SELECT product_name FROM products WHERE shop_id = {} AND stock < 6 ORDER BY product_id", shop_id)
-    late = q("SELECT customer_name FROM routines WHERE shop_id = {} AND routine_state = 'pending' AND due_minute <= {}", shop_id, clock)
-    e = html.escape
-    pct = lambda x: f"{round(x * 100, 1)}%"
-    rs = lambda v: "₹" + f"{num(v):,}"
-    factors = [
-        {"name": "Sales growth", "s": "good" if growth > 0.05 else "watch" if growth > -0.05 else "bad",
-         "why": f"Sales {'up' if growth >= 0 else 'down'} {pct(abs(growth))} in October vs September"},
-        {"name": "Profit margin", "s": "good" if margin >= 0.12 else "watch" if margin >= 0.08 else "bad",
-         "why": f"{pct(margin)} margin in October (target 12% or more)"},
-        {"name": "Credit to collect", "s": "watch" if old else "good",
-         "why": (f"{rs(owed)} on khata · " + ", ".join(f"{e(k['customer_name'])} owes {rs(k['balance'])} for {num(k['days_open'])} days" for k in old))
-                if old else f"{rs(owed)} on khata, all recent"},
-        {"name": "Stock levels", "s": "bad" if len(low) >= 3 else "watch" if low else "good",
-         "why": ("Running low: " + ", ".join(e(p["product_name"]) for p in low)) if low else "All items above reorder level"},
-        {"name": "Regular orders", "s": "watch" if late else "good",
-         "why": (f"{len(late)} overdue today: " + ", ".join(e(r["customer_name"]) for r in late)) if late else "All regular orders on time"},
-    ]
-    score = sum({"good": 20, "watch": 12, "bad": 5}[f["s"]] for f in factors)
-    return {"score": score, "label": "Healthy" if score >= 80 else "Needs attention" if score >= 60 else "At risk", "factors": factors}
-
-
-def report(shop_id, clock):
-    months = [{"m": r["month_start"].strftime("%b") if hasattr(r["month_start"], "strftime") else datetime.strptime(str(r["month_start"]), "%Y-%m-%d").strftime("%b"),
-               "sales": num(r["sales"]), "profit": num(r["profit"]), "orders": num(r["order_count"]), "phone": num(r["phone_pct"])}
-              for r in q("SELECT * FROM monthly_sales WHERE shop_id = {} ORDER BY month_start", shop_id)]
-    tops = [[r["product_name"], num(r["sales"])] for r in q("SELECT product_name, sales FROM top_sellers WHERE shop_id = {} ORDER BY sales DESC", shop_id)]
-    return {"today": today(shop_id), "months": months, "top": tops, "health": health(shop_id, clock)}
-
-
-# ---------- routes ----------
+# ---------- pages ----------
 
 @app.get("/")
-def index():
-    return send_from_directory(app.static_folder, "index.html")
+def home():
+    return render_template("home.html", shops=q("SELECT * FROM shops ORDER BY shop_name"), ai=gemini.enabled())
 
 
-@app.get("/api/shops")
-def shops():
-    rows = q("""SELECT s.*, (SELECT COUNT(*) FROM products p WHERE p.shop_id = s.shop_id) AS product_count
-                FROM shops s ORDER BY distance_m""")
-    return jsonify([{**r, "distance_m": num(r["distance_m"]), "years_open": num(r["years_open"]), "product_count": num(r["product_count"])} for r in rows])
+@app.route("/merchant/signin", methods=["GET", "POST"])
+def merchant_signin():
+    if request.method == "POST":
+        shop = q1("SELECT shop_id FROM shops WHERE shop_id = {}", request.form.get("shop_id"))
+        if shop:
+            session["shop_id"] = shop["shop_id"]
+            return redirect(request.args.get("next") or url_for("dashboard"))
+    return render_template("merchant_signin.html", shops=q("SELECT * FROM shops ORDER BY shop_id DESC"))
 
 
-@app.get("/api/shops/<shop_id>")
-def shop(shop_id):
-    clock = int(request.args.get("clock", 540))
-    s = q1("SELECT * FROM shops WHERE shop_id = {}", shop_id)
-    if not s:
-        return err("No such shop", 404)
-    prods = q("SELECT * FROM products WHERE shop_id = {} ORDER BY product_id", shop_id)
-    names = {p["product_id"]: p["product_name"] for p in prods}
-    routines = []
-    for r in q("SELECT * FROM routines WHERE shop_id = {} ORDER BY due_minute", shop_id):
-        items = [(pid, num(qty)) for pid, qty in (x.split(":") for x in r["items"].split(","))]
-        routines.append({"id": r["routine_id"], "who": r["customer_name"], "label": r["schedule_label"], "due": num(r["due_minute"]),
-                         "state": r["routine_state"], "reminders": num(r["reminders"]),
-                         "items": [{"name": names[pid], "qty": qty} for pid, qty in items]})
-    hist = {}
-    for h in q("""SELECT h.cat, p.product_name, h.usual_qty FROM purchase_history h JOIN products p ON p.product_id = h.product_id
-                  WHERE h.customer_id = {} AND h.shop_id = {} ORDER BY h.cat, p.product_id""", CUSTOMER_ID, shop_id):
-        hist.setdefault(h["cat"], []).append({"name": h["product_name"], "qty": num(h["usual_qty"])})
-    return jsonify({
-        "shop": {**s, "distance_m": num(s["distance_m"]), "years_open": num(s["years_open"])},
-        "products": [{"id": p["product_id"], "name": p["product_name"], "price": num(p["price"]), "cost": num(p["cost"]), "stock": num(p["stock"])} for p in prods],
-        "khata": [{"who": k["customer_name"], "balance": num(k["balance"])} for k in q("SELECT * FROM khata WHERE shop_id = {} ORDER BY customer_name = 'Meena' DESC, balance DESC", shop_id)],
-        "routines": routines, "history": hist, "samples": seed_data.SAMPLES.get(shop_id, {}),
-        "report": report(shop_id, clock),
-    })
+@app.get("/merchant/signout")
+def merchant_signout():
+    session.pop("shop_id", None)
+    return redirect(url_for("home"))
 
 
-@app.post("/api/shops/<shop_id>/onboard")
-def onboard(shop_id):
-    owner = (request.json or {}).get("owner_name", "").strip()
-    q("UPDATE shops SET has_knode = TRUE, owner_name = COALESCE({}, owner_name) WHERE shop_id = {}", owner or None, shop_id)
+@app.get("/dashboard")
+@merchant_required
+def dashboard():
+    shop = current_shop()
+    return render_template("dashboard.html", shop=shop, queue=dashboard_data(shop["shop_id"]), stats=stats(shop["shop_id"]),
+                           shop_link=request.host_url.rstrip("/") + url_for("shop_page", shop_id=shop["shop_id"]),
+                           out_of_stock=q("SELECT * FROM products WHERE shop_id = {} AND NOT in_stock ORDER BY product_name", shop["shop_id"]),
+                           ai=gemini.enabled(), model=gemini.model_name())
+
+
+@app.get("/dashboard/queue")
+@merchant_required
+def dashboard_queue():
+    """Order queue fragment the dashboard reloads every few seconds."""
+    return render_template("_queue.html", queue=dashboard_data(session["shop_id"]))
+
+
+@app.get("/dashboard/order/<int:oid>")
+@merchant_required
+def verify(oid):
+    o = load_order(oid)
+    if not o or o["shop_id"] != session["shop_id"]:
+        abort(404)
+    return render_template("verify.html", shop=current_shop(), o=o)
+
+
+@app.get("/shop/<shop_id>")
+def shop_page(shop_id):
+    shop = q1("SELECT * FROM shops WHERE shop_id = {}", shop_id)
+    if not shop:
+        abort(404)
+    cust = current_customer()
+    recent = q("""SELECT order_id, order_state, total, created_at FROM orders WHERE shop_id = {} AND customer_id = {}
+                  ORDER BY created_at DESC LIMIT 5""", shop_id, num(cust["customer_id"])) if cust else []
+    return render_template("shop.html", shop=shop, cust=cust, recent=recent, states=STATES, ai=gemini.enabled())
+
+
+@app.post("/shop/<shop_id>/signin")
+def customer_signin(shop_id):
+    name = request.form.get("name", "").strip()[:100]
+    phone = re.sub(r"\D", "", request.form.get("phone", ""))[-10:]
+    address = request.form.get("address", "").strip()[:200]
+    if not name or len(phone) != 10:
+        return redirect(url_for("shop_page", shop_id=shop_id, error="Enter your name and a 10-digit phone number."))
+    c = q1("SELECT customer_id FROM customers WHERE phone = {}", phone)
+    if c:
+        cid = num(c["customer_id"])
+        q("UPDATE customers SET customer_name = {}, address = COALESCE(NULLIF({}, ''), address) WHERE customer_id = {}", name, address, cid)
+    else:
+        cid = db.next_id("customers", "customer_id", 0)
+        q("INSERT INTO customers VALUES ({}, {}, {}, {}, {})", cid, name, phone, address, datetime.now().replace(microsecond=0))
+    session["customer_id"] = cid
+    return redirect(url_for("shop_page", shop_id=shop_id))
+
+
+@app.get("/shop/<shop_id>/signout")
+def customer_signout(shop_id):
+    session.pop("customer_id", None)
+    return redirect(url_for("shop_page", shop_id=shop_id))
+
+
+@app.get("/shop/<shop_id>/order/<int:oid>")
+def order_status(shop_id, oid):
+    o = load_order(oid)
+    if not o or o["shop_id"] != shop_id or session.get("customer_id") != num(o["customer_id"]):
+        abort(404)
+    return render_template("order_status.html", shop=q1("SELECT * FROM shops WHERE shop_id = {}", shop_id), o=o)
+
+
+@app.get("/uploads/<path:name>")
+def upload(name):
+    o = q1("SELECT * FROM orders WHERE upload_file = {}", name)
+    if not can_view(o):
+        abort(404)
+    return send_from_directory(UPLOADS, name)
+
+
+# ---------- API ----------
+
+@app.post("/api/process-order")
+def process_order():
+    """Take a customer's photo, voice note or text, read it with Gemini and file an itemised bill for the shop."""
+    cust = current_customer()
+    shop = q1("SELECT * FROM shops WHERE shop_id = {}", request.form.get("shop_id"))
+    if not cust:
+        return jsonify(ok=False, message="Please sign in first."), 401
+    if not shop:
+        return jsonify(ok=False, message="Shop not found."), 404
+    channel = request.form.get("channel", "text")
+    text = request.form.get("text", "").strip()[:2000]
+    note = request.form.get("note", "").strip()[:500]
+    f = request.files.get("file")
+    data = mime = None
+    if f and f.filename:
+        mime = (f.mimetype or "").split(";")[0].lower()
+        allowed = IMAGE_TYPES if channel == "photo" else AUDIO_TYPES
+        if mime not in allowed:
+            return jsonify(ok=False, message="That file type isn't supported. Send a photo (JPG or PNG) or an audio file (WAV, MP3, M4A, OGG)."), 400
+        data = f.read()
+    if not data and not text:
+        return jsonify(ok=False, message="Add a photo, a voice note or type your order."), 400
+
+    catalog = q("SELECT product_id, product_name, unit, price, keywords, in_stock FROM products WHERE shop_id = {} ORDER BY product_id", shop["shop_id"])
+    for p in catalog:
+        p["price"] = num(p["price"])
+    db.release_request_connection()  # don't hold a database connection while Gemini reads the order
+    try:
+        if gemini.enabled():
+            parsed, engine = gemini.parse_order(catalog, channel, data=data, mime_type=mime, text=text or None)
+        elif text and not data:
+            parsed, engine = gemini.parse_typed_without_ai(catalog, text), "keyword matcher (no Gemini key)"
+        else:
+            return jsonify(ok=False, message="Reading photos and voice notes needs a Gemini API key on the server. Type your order instead, or ask the shop to add the key."), 503
+    except Exception as e:  # network, quota or model errors from the Gemini API
+        app.logger.exception("Gemini failed")
+        detail = str(e)
+        if "API_KEY_INVALID" in detail or "API key not valid" in detail:
+            msg = "The shop's Gemini API key isn't valid. Check GEMINI_API_KEY in .env."
+        elif "NOT_FOUND" in detail and "model" in detail.lower():
+            msg = f"The Gemini model “{gemini.model_name()}” wasn't found. Check GEMINI_MODEL in .env."
+        elif "RESOURCE_EXHAUSTED" in detail or "429" in detail:
+            msg = "Too many orders at once for the free Gemini tier. Please try again in a minute."
+        elif gemini.is_busy(e):
+            msg = "Gemini is busy right now. Please try again in a minute."
+        else:
+            msg = f"Couldn't read the order right now ({type(e).__name__}). Please try again in a minute."
+        return jsonify(ok=False, message=msg), 502
+    if not parsed.items:
+        return jsonify(ok=False, message="I couldn't find any items in that. Try a clearer photo, or type the items."), 422
+
+    byid = {p["product_id"]: p for p in catalog}
+    oid = db.next_id("orders", "order_id", 3000)
+    now = datetime.now().replace(microsecond=0)
+    fname = None
+    if data:
+        fname = f"order-{oid}.{(IMAGE_TYPES if channel == 'photo' else AUDIO_TYPES)[mime]}"
+        (UPLOADS / fname).write_bytes(data)
+    notes = "; ".join(x for x in [parsed.customer_note, note] if x) or None
+    q("INSERT INTO orders VALUES ({}, {}, {}, 'pending', {}, {}, {}, {}, {}, 0, {}, {})",
+      oid, shop["shop_id"], num(cust["customer_id"]), channel, fname, parsed.transcript[:4000], notes, engine, now, now)
+    item_id = db.next_id("order_items", "item_id", 9000)
+    for n, line in enumerate(parsed.items, start=1):
+        p = byid.get(line.product_id)
+        qty = max(float(line.quantity or 1), 0.5)
+        if p:
+            vals = (p["product_id"], p["product_name"], p["unit"], p["price"], bool(p["in_stock"]), None if p["in_stock"] else "Out of stock")
+        else:
+            vals = (None, line.item_name, line.unit, None, False, "Not sold at this shop")
+        q("INSERT INTO order_items VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+          item_id + n - 1, oid, n, vals[0], line.raw_text[:300], vals[1], qty, vals[2], vals[3], vals[4], vals[5])
+    recompute(oid)
+    return jsonify(ok=True, order_id=oid, redirect=url_for("order_status", shop_id=shop["shop_id"], oid=oid))
+
+
+@app.get("/api/orders/<int:oid>")
+def api_order(oid):
+    o = load_order(oid)
+    if not can_view(o):
+        abort(404)
+    return jsonify(order_json(o))
+
+
+@app.post("/api/orders/<int:oid>/items/<int:item_id>/availability")
+@merchant_required
+def set_availability(oid, item_id):
+    o = load_order(oid)
+    if not o or o["shop_id"] != session["shop_id"]:
+        abort(404)
+    item = next((i for i in o["items"] if num(i["item_id"]) == item_id), None)
+    if not item or item["product_id"] is None:
+        return jsonify(ok=False, message="This item isn't in your catalog."), 400
+    avail = bool((request.json or {}).get("available"))
+    q("UPDATE order_items SET available = {}, match_note = {} WHERE item_id = {}", avail, None if avail else "Out of stock", item_id)
+    q("UPDATE products SET in_stock = {} WHERE product_id = {}", avail, item["product_id"])
+    recompute(oid)
+    return jsonify(ok=True, order=order_json(load_order(oid)))
+
+
+@app.post("/api/orders/<int:oid>/state")
+@merchant_required
+def set_state(oid):
+    o = load_order(oid)
+    if not o or o["shop_id"] != session["shop_id"]:
+        abort(404)
+    new = (request.json or {}).get("state")
+    allowed = {"pending": {"ready", "cancelled"}, "ready": {"completed", "cancelled"}}
+    if new not in allowed.get(o["order_state"], set()):
+        return jsonify(ok=False, message="That step isn't possible for this order."), 400
+    q("UPDATE orders SET order_state = {}, updated_at = {} WHERE order_id = {}", new, datetime.now().replace(microsecond=0), oid)
     return jsonify(ok=True)
 
 
-@app.post("/api/shops/<shop_id>/orders")
-def create_order(shop_id):
-    body = request.json or {}
-    text, channel = body.get("text", "").strip(), body.get("channel", "text")
-    s = q1("SELECT has_knode FROM shops WHERE shop_id = {}", shop_id)
-    if not s or not s["has_knode"]:
-        return err("This shop is not on Knode yet.")
-    lines = parse(text, shop_id)
-    if not lines:
-        return jsonify(ok=False, message="Sorry, I couldn't find any of this shop's products in that. Try naming the items, like “2 milk and bread”.")
-    oid = new_order_id()
-    pay = "khata" if re.search(r"account|khata|credit|udhaar|udhar", text, re.I) else None
-    q("INSERT INTO orders VALUES ({}, {}, {}, {}, {}, 'review', {}, 0, 0, {}, NULL)", oid, shop_id, CUSTOMER_NAME, channel, text[:2000], pay, now())
-    add_items(oid, lines)
-    return jsonify(ok=True, bill=bill(oid))
-
-
-@app.post("/api/orders/<int:order_id>/message")
-def order_message(order_id):
-    """Customer replies while reviewing a bill: confirm, add or remove items."""
-    t = (request.json or {}).get("text", "").strip().lower()
-    o = q1("SELECT shop_id, order_state FROM orders WHERE order_id = {}", order_id)
-    if not o or o["order_state"] != "review":
-        return err("That bill is no longer open.")
-    if re.match(r"^(confirm|ok|okay|yes|correct|done|fine)\b", t):
-        return jsonify(ok=True, action="confirm", bill=bill(order_id))
-    rem = re.match(r"^(remove|no|cancel|without|drop|don'?t)\b(.*)", t)
-    if rem:
-        ids = [line["product_id"] for line in parse(rem.group(2), o["shop_id"])]
-        found = [i for i in ids if q1("SELECT 1 AS x FROM order_items WHERE order_id = {} AND product_id = {}", order_id, i)]
-        if not found:
-            return jsonify(ok=True, action="error", message="I couldn't find that item on your bill.")
-        for i in found:
-            q("DELETE FROM order_items WHERE order_id = {} AND product_id = {}", order_id, i)
-        if not q1("SELECT 1 AS x FROM order_items WHERE order_id = {}", order_id):
-            q("UPDATE orders SET order_state = 'cancelled' WHERE order_id = {}", order_id)
-            return jsonify(ok=True, action="empty", message="Your bill is empty now. Send a new order any time.")
-        recompute(order_id)
-        return jsonify(ok=True, action="bill", message="Removed. Here is the updated bill:", bill=bill(order_id))
-    add = re.match(r"^(add|also|plus|and|one more)\b(.*)", t)
-    extra = parse(add.group(2) if add else t, o["shop_id"])
-    if not extra:
-        return jsonify(ok=True, action="error", message="I didn't catch that. Reply “add …”, “remove …”, or tap Confirm.")
-    add_items(order_id, extra)
-    return jsonify(ok=True, action="bill", message="Added. Here is the updated bill:", bill=bill(order_id))
-
-
-@app.post("/api/orders/<int:order_id>/confirm")
-def confirm(order_id):
-    pay = (request.json or {}).get("pay_mode")
-    o = q1("SELECT order_state, pay_mode FROM orders WHERE order_id = {}", order_id)
-    if not o or o["order_state"] != "review":
-        return err("That bill is no longer open.")
-    pay = pay or o["pay_mode"]
-    if pay not in ("khata", "cash"):
-        return err("Choose how to pay.")
-    q("UPDATE orders SET order_state = 'confirmed', pay_mode = {} WHERE order_id = {}", pay, order_id)
-    return jsonify(ok=True, bill=bill(order_id))
-
-
-@app.post("/api/orders/<int:order_id>/pack")
-def pack(order_id):
-    o = q1("SELECT shop_id, order_state FROM orders WHERE order_id = {}", order_id)
-    if not o or o["order_state"] != "confirmed":
-        return err("This order is not waiting to be packed.")
-    ids = [r["product_id"] for r in q("SELECT product_id FROM order_items WHERE order_id = {}", order_id)]
-    sell(order_id)
-    b = bill(order_id)
-    bal = q1("SELECT balance FROM khata WHERE shop_id = {} AND customer_name = {}", o["shop_id"], CUSTOMER_NAME)
-    low = [{"name": p["product_name"], "stock": num(p["stock"])} for p in q("SELECT product_name, stock, product_id FROM products ORDER BY product_id")
-           if p["product_id"] in ids and num(p["stock"]) < 6]
-    return jsonify(ok=True, bill=b, khata_balance=num(bal["balance"]) if bal else 0, low_stock=low, today=today(o["shop_id"]))
-
-
-@app.post("/api/routines/<routine_id>/remind")
-def remind(routine_id):
-    q("UPDATE routines SET reminders = reminders + 1 WHERE routine_id = {}", routine_id)
+@app.post("/api/products/<pid>/stock")
+@merchant_required
+def set_stock(pid):
+    avail = bool((request.json or {}).get("in_stock"))
+    q("UPDATE products SET in_stock = {} WHERE product_id = {} AND shop_id = {}", avail, pid, session["shop_id"])
     return jsonify(ok=True)
-
-
-@app.post("/api/routines/<routine_id>/deliver")
-def deliver(routine_id):
-    r = q1("SELECT * FROM routines WHERE routine_id = {}", routine_id)
-    if not r or r["routine_state"] == "done":
-        return err("Already delivered.")
-    oid = new_order_id()
-    q("INSERT INTO orders VALUES ({}, {}, {}, 'routine', {}, 'confirmed', 'khata', 0, 0, {}, NULL)", oid, r["shop_id"], r["customer_name"], r["items"], now())
-    add_items(oid, [{"product_id": pid, "qty": float(qty), "note": "regular order"} for pid, qty in (x.split(":") for x in r["items"].split(","))])
-    sell(oid)
-    q("UPDATE routines SET routine_state = 'done' WHERE routine_id = {}", routine_id)
-    o = q1("SELECT total FROM orders WHERE order_id = {}", oid)
-    return jsonify(ok=True, amount=num(o["total"]), who=r["customer_name"])
-
-
-@app.post("/api/shops/<shop_id>/command")
-def command(shop_id):
-    """Shop owner's own messages to the bot."""
-    body = request.json or {}
-    t, clock = body.get("text", "").strip().lower(), int(body.get("clock", 540))
-    e = html.escape
-    rs = lambda v: "₹" + f"{num(v):,}"
-    k = re.match(r"^khata\s+(.+)", t)
-    if k:
-        row = q1("SELECT customer_name, balance FROM khata WHERE shop_id = {} AND LOWER(customer_name) LIKE {}", shop_id, "%" + k.group(1).strip() + "%")
-        return jsonify(html=f"{e(row['customer_name'])} owes <b>{rs(row['balance'])}</b>." if row else f"No khata found for “{e(k.group(1))}”.")
-    st = re.match(r"^stock\s+(.+)", t)
-    if st:
-        w = st.group(1).strip()
-        rows = q("SELECT product_name, stock, price FROM products WHERE shop_id = {} AND (LOWER(product_name) LIKE {} OR cat = {}) ORDER BY product_id",
-                 shop_id, "%" + w + "%", w)
-        return jsonify(html="<br>".join(f"{e(p['product_name'])}: <b>{num(p['stock'])}</b> · {rs(p['price'])}" for p in rows) or f"I couldn't find “{e(w)}” in stock.")
-    if re.search(r"report|profit|sales|health", t):
-        r = report(shop_id, clock)
-        td, o, h = r["today"], r["months"][-1], r["health"]
-        issues = "<br>".join("• " + f["why"] for f in h["factors"] if f["s"] != "good") or "Everything looks good."
-        return jsonify(html=f"<b>Today so far</b><br>Sales {rs(td['sales'])} · Profit {rs(td['profit'])} · {td['orders']} orders<br><br>"
-                            f"<b>October</b><br>Sales {rs(o['sales'])} · Profit {rs(o['profit'])} ({round(o['profit'] / o['sales'] * 100, 1)}% margin)<br><br>"
-                            f"<b>Business health: {h['score']}/100, {h['label']}</b><br>{issues}")
-    return jsonify(html="Try <i>“report”</i>, <i>“stock rice”</i> or <i>“khata Meena”</i>.")
 
 
 @app.post("/api/reset")
+@merchant_required
 def reset():
     db.reset_database()
+    for f in UPLOADS.glob("order-*"):
+        f.unlink()
     return jsonify(ok=True)
 
 
+@app.errorhandler(500)
+def server_error(e):
+    cause = str(getattr(e, "original_exception", e) or "")
+    if "license limit" in cause:
+        msg = "The database has too many open connections. Close other KNODE apps or restart this one."
+    elif "Connection refused" in cause or "ExaCommunicationError" in type(getattr(e, "original_exception", e)).__name__:
+        msg = "Can't reach the Exasol database. Start it with: exasol start -d knode"
+    else:
+        msg = "Something went wrong on our side. Please try again."
+    if request.path.startswith("/api/"):
+        return jsonify(ok=False, message=msg), 500
+    return render_template("error.html", message=msg), 500
+
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify(ok=False, message="Not found."), 404
+    return render_template("error.html", message="That page doesn't exist, or you don't have access to it."), 404
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True)
