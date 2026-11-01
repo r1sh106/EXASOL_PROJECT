@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KNODE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Caveat:wght@500&display=swap">
+<style>
+/* Layout: neighbourhood shop picker, then the selected shop's sign-up strip + flow stepper,
+   then customer phone | shop phone | shop panel, then the business report */
+:root{
+  --bg:#eef0f6; --bar:#f7c8a4; --panel:#ffffff; --ink:#1a1f36; --muted:#5b6280; --line:#d9dce8;
+  --frame:#1a1f36; --head:#232a4d; --head-ink:#ffffff; --chat:#e5e8f2;
+  --in:#ffffff; --out:#ffe4c9; --meta:#6b7290; --accent:#d9611a; --accent-ink:#ffffff;
+  --btn-ink:#b84f10; --ok:#1f7a55; --ok-bg:#dcf1e7; --warn:#806300; --warn-bg:#fbf0c4;
+  --bad:#b3261e; --bad-bg:#fde3e0; --paper:#fffdf4; --paper-line:#c9d8ea; --pen:#1f3a8a;
+  --ui:"Figtree",system-ui,-apple-system,"Segoe UI",sans-serif; --hand:"Caveat","Comic Sans MS",cursive;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1220; --bar:#5c3a22; --panel:#171b2e; --ink:#e6e8f2; --muted:#9aa0bd; --line:#2a2f48;
+  --frame:#000000; --head:#1d2240; --head-ink:#e6e8f2; --chat:#12152a;
+  --in:#20253f; --out:#5a3313; --meta:#8f95b3; --accent:#ff8a3d; --accent-ink:#2a1200;
+  --btn-ink:#ffa463; --ok:#74d6a6; --ok-bg:#163a2b; --warn:#e8c95a; --warn-bg:#3a3110;
+  --bad:#ff8a80; --bad-bg:#40181a; --paper:#f4f0e2; --paper-line:#b9c9dc; --pen:#1f3a8a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1220; --bar:#5c3a22; --panel:#171b2e; --ink:#e6e8f2; --muted:#9aa0bd; --line:#2a2f48;
+  --frame:#000000; --head:#1d2240; --head-ink:#e6e8f2; --chat:#12152a;
+  --in:#20253f; --out:#5a3313; --meta:#8f95b3; --accent:#ff8a3d; --accent-ink:#2a1200;
+  --btn-ink:#ffa463; --ok:#74d6a6; --ok-bg:#163a2b; --warn:#e8c95a; --warn-bg:#3a3110;
+  --bad:#ff8a80; --bad-bg:#40181a; --paper:#f4f0e2; --paper-line:#b9c9dc; --pen:#1f3a8a; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:14px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+button{font:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+header.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:36px;height:36px;border-radius:10px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-weight:700;font-size:18px}
+.brand h1{margin:0;font-size:20px;letter-spacing:-.01em}
+.brand p{margin:0;color:var(--muted);font-size:12.5px}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.clock{font-variant-numeric:tabular-nums;font-weight:600;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.ghost{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 12px}
+.ghost:hover{border-color:var(--accent)}
+.primary{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 16px;font-weight:600}
+.dbline{font-size:12px;color:var(--muted)}
+.dbline b{color:var(--ink)}
+
+.hood{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.hood-h{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px}
+.hood-h h2{margin:0;font-size:16px}
+.hood-h p{margin:0;color:var(--muted);font-size:12.5px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:16px;padding:4px 12px;font-size:12.5px}
+.chips button[aria-pressed="true"]{background:var(--head);border-color:var(--head);color:var(--head-ink)}
+.shops{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.shopcard{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;background:var(--panel)}
+.shopcard:hover{border-color:var(--accent)}
+.shopcard:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.shopcard[aria-current="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);background:color-mix(in srgb,var(--out) 35%,var(--panel))}
+.shopcard .top{display:flex;justify-content:space-between;gap:6px;align-items:center}
+.shopcard .kind{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.shopcard b{font-size:14.5px}
+.shopcard small{color:var(--muted);font-size:12px}
+.shopcard .meta{font-size:12px;color:var(--ink);font-variant-numeric:tabular-nums}
+
+.setup{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.setup label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:500}
+.setup input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;width:200px;max-width:100%}
+.setup .lead{flex-basis:100%;margin:0;font-weight:600}
+.setup .lead small{display:block;font-weight:400;color:var(--muted)}
+.setup.live{align-items:center}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:6px}
+
+.steps{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;margin:0;list-style:none;padding-left:0}
+.steps li{flex:1 0 128px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
+.steps .n{flex:none;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.steps li.done{color:var(--ink)} .steps li.done .n{background:var(--ok);border-color:var(--ok);color:var(--panel)}
+.steps li.now{border-color:var(--accent);color:var(--ink);box-shadow:0 0 0 1px var(--accent)} .steps li.now .n{border-color:var(--accent);color:var(--accent)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:20px;align-items:start}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.col-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.col-h h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.col-h span{font-size:12px;color:var(--muted)}
+
+.phone{border:8px solid var(--frame);border-radius:30px;overflow:hidden;height:600px;display:flex;flex-direction:column;background:var(--chat);position:relative;width:100%;max-width:380px;margin:0 auto}
+.p-head{background:var(--head);color:var(--head-ink);padding:12px 14px;display:flex;gap:10px;align-items:center}
+.avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.2);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
+.p-head b{display:block;font-size:14.5px}
+.p-head small{opacity:.8;font-size:11.5px}
+.chat{flex:1;overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:6px}
+.msg{max-width:86%;padding:7px 10px 5px;border-radius:14px;background:var(--in);color:var(--ink);box-shadow:0 1px 0.5px rgba(0,0,0,.13);font-size:13.5px;overflow-wrap:anywhere;animation:pop .18s ease-out}
+.msg.me{align-self:flex-end;background:var(--out);border-bottom-right-radius:4px}
+.msg.them{align-self:flex-start;border-bottom-left-radius:4px}
+.msg .t{display:block;text-align:right;font-size:10.5px;color:var(--meta);margin-top:2px;font-variant-numeric:tabular-nums}
+.msg.sys{align-self:center;background:var(--panel);color:var(--muted);font-size:11.5px;box-shadow:none;border-radius:6px;padding:4px 10px;text-align:center}
+@keyframes pop{from{transform:translateY(4px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.msg,.typing i{animation:none!important}}
+.btns{display:flex;flex-direction:column;border-top:1px solid var(--line);margin:6px -10px -5px}
+.btns button{background:none;border:0;border-top:1px solid var(--line);color:var(--btn-ink);font-weight:600;padding:8px;font-size:13.5px}
+.btns button:first-child{border-top:0}
+.btns button:disabled{color:var(--meta);cursor:default}
+.typing{display:flex;gap:3px;padding:10px 12px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--meta);animation:blink 1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes blink{50%{opacity:.25}}
+.composer{display:flex;gap:6px;padding:8px;background:var(--chat)}
+.composer input{flex:1;min-width:0;font:inherit;border:0;border-radius:20px;padding:9px 14px;background:var(--in);color:var(--ink)}
+.composer button{width:40px;height:40px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);font-weight:700;flex:none}
+.lock{position:absolute;inset:0;background:color-mix(in srgb,var(--chat) 90%,transparent);display:grid;place-items:center;text-align:center;padding:24px;color:var(--muted);font-weight:500}
+
+.bill{width:100%;border-collapse:collapse;margin:6px 0;font-variant-numeric:tabular-nums;font-size:12.5px}
+.bill td{padding:3px 0;vertical-align:top}
+.bill td:last-child{text-align:right;white-space:nowrap;padding-left:8px}
+.bill tr.tot td{border-top:1px dashed var(--meta);font-weight:700;padding-top:5px}
+.bill small{display:block;color:var(--meta);font-size:11px}
+.bill small.warn{color:var(--warn)}
+.tag{display:inline-block;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:10px;background:var(--ok-bg);color:var(--ok);white-space:nowrap}
+.tag.warn{background:var(--warn-bg);color:var(--warn)} .tag.bad{background:var(--bad-bg);color:var(--bad)} .tag.mute{background:var(--bg);color:var(--muted)}
+.pack label{display:flex;gap:6px;align-items:flex-start;padding:2px 0;font-size:12.5px}
+.voice{display:flex;align-items:center;gap:8px;min-width:200px}
+.voice .pl{width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:11px;flex:none}
+.wave{display:flex;gap:2px;align-items:center;height:24px;flex:1}
+.wave i{width:3px;border-radius:2px;background:var(--meta)}
+.voice span{font-size:11px;color:var(--meta);font-variant-numeric:tabular-nums}
+details{font-size:12px;color:var(--muted);margin-top:4px} summary{cursor:pointer}
+.paper{background:var(--paper);color:var(--pen);font-family:var(--hand);font-size:22px;line-height:30px;padding:6px 14px 8px 30px;border-radius:4px;transform:rotate(-1.5deg);margin:4px 2px;
+  background-image:repeating-linear-gradient(to bottom,transparent 0 29px,var(--paper-line) 29px 30px),linear-gradient(to right,transparent 22px,#e9a3a3 22px 23px,transparent 23px)}
+.samples{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;max-width:380px;margin:0 auto}
+.samples button{background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:18px;padding:6px 12px;font-size:12.5px;font-weight:500}
+.samples button:hover:not(:disabled){border-color:var(--accent);color:var(--btn-ink)}
+.samples button:disabled{opacity:.5;cursor:default}
+.hint{font-size:12px;color:var(--muted);text-align:center;margin:0}
+
+.brain{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tabs{display:flex;border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{flex:1;background:none;border:0;padding:10px 8px;color:var(--muted);font-weight:600;font-size:12.5px;border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.pane{padding:12px 14px;max-height:560px;overflow-y:auto}
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+.tbl th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:6px 4px;border-bottom:1px solid var(--line)}
+.tbl td{padding:7px 4px;border-bottom:1px solid var(--line)}
+.tbl .r{text-align:right}
+.tbl small{display:block;color:var(--muted)}
+.flash{animation:fl 1.2s ease-out}
+@keyframes fl{from{background:var(--warn-bg)}to{background:transparent}}
+.rt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.rt-top{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.rt small{color:var(--muted)}
+.cust ul{margin:4px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px}
+.note{font-size:12px;color:var(--muted);margin:8px 0 0}
+
+.report{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.rep-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
+@media (min-width:700px){.rep-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.rep-grid .wide{grid-column:span 2}}
+@media (min-width:1100px){.rep-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.9fr) minmax(0,1.2fr)}.rep-grid .wide{grid-column:auto}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card h3{margin:0;font-size:15px;display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.card h3 small{font-weight:500;color:var(--muted);font-size:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.kpi{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:10px;background:var(--bg)}
+.kpi span{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+.kpi b{font-size:20px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.kpi small{font-size:11.5px;color:var(--muted)}
+.kpi small.up{color:var(--ok);font-weight:600} .kpi small.down{color:var(--bad);font-weight:600}
+.chart{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font-family:var(--ui);font-size:11px}
+.chart .val{fill:var(--ink);font-weight:600}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.score{display:flex;align-items:center;gap:14px}
+.ring{width:72px;height:72px;flex:none}
+.ring text{font-family:var(--ui);font-weight:700;font-size:22px;fill:var(--ink)}
+.factors{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.factors li{display:flex;gap:10px;justify-content:space-between;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line);font-size:12.5px}
+.factors li div{min-width:0}
+.factors li small{display:block;color:var(--muted)}
+.flash-card{animation:fl 1.4s ease-out}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--bad);color:#fff;padding:10px 16px;border-radius:8px;font-weight:500;max-width:calc(100% - 32px)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">K</div>
+      <div><h1>KNODE</h1><p>Phone ordering for the small shops your neighbourhood relies on</p></div>
+    </div>
+    <div class="tools">
+      <span class="dbline" id="dbline">Connecting to Exasol…</span>
+      <span class="clock" id="clock" title="Simulated shop time">9:00 AM</span>
+      <button class="ghost" id="advance" type="button">+1 hour</button>
+      <button class="ghost" id="reset" type="button">Reset demo data</button>
+    </div>
+  </header>
+
+  <section class="hood" aria-labelledby="hoodTitle">
+    <div class="hood-h">
+      <div><h2 id="hoodTitle">Shops near Meena</h2><p id="custAddr">Banyan Street</p></div>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="shops" id="shops"></div>
+    <p class="note" style="margin:0">Small shops people have bought from for years, most with no app or website. Shops on Knode take orders by phone. Pick one to order from, or sign one up.</p>
+  </section>
+
+  <form class="setup" id="setup"></form>
+
+  <ol class="steps" id="steps">
+    <li><span class="n">1</span>Shop owner signs up</li>
+    <li><span class="n">2</span>Helper bot set up</li>
+    <li><span class="n">3</span>Customer sends order</li>
+    <li><span class="n">4</span>Bot builds the bill</li>
+    <li><span class="n">5</span>Customer reviews bill</li>
+    <li><span class="n">6</span>Shop packs the order</li>
+    <li><span class="n">7</span>Customer notified</li>
+  </ol>
+
+  <div class="grid">
+    <section class="col">
+      <div class="col-h"><h2>Customer's phone</h2><span>Meena, Flat 204</span></div>
+      <div class="phone">
+        <div class="p-head"><div class="avatar" id="custAvatar">–</div><div><b id="custTitle">–</b><small id="custSub">ordering by phone</small></div></div>
+        <div class="chat" id="cust"></div>
+        <form class="composer" id="custForm"><input id="custInput" placeholder="Type an order" autocomplete="off"><button type="submit" aria-label="Send">➤</button></form>
+        <div class="lock" id="custLock"></div>
+      </div>
+      <p class="hint">Send a sample order the way real customers do:</p>
+      <div class="samples">
+        <button type="button" data-sample="voice">Voice note</button>
+        <button type="button" data-sample="text">Text message</button>
+        <button type="button" data-sample="photo">Photo of handwritten list</button>
+      </div>
+    </section>
+
+    <section class="col">
+      <div class="col-h"><h2>Shop owner's phone</h2><span id="ownerLabel">–</span></div>
+      <div class="phone">
+        <div class="p-head"><div class="avatar">KN</div><div><b>KNODE</b><small>your shop assistant</small></div></div>
+        <div class="chat" id="shop"></div>
+        <form class="composer" id="shopForm"><input id="shopInput" placeholder="Try: report · stock … · khata Meena" autocomplete="off"><button type="submit" aria-label="Send">➤</button></form>
+      </div>
+      <p class="hint">Reminders for regular orders repeat every hour until marked delivered. Use “+1 hour”.</p>
+    </section>
+
+    <section class="col">
+      <div class="col-h"><h2>What the bot knows</h2><span>from Exasol</span></div>
+      <div class="brain">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="inv" type="button">Inventory</button>
+          <button role="tab" aria-selected="false" data-tab="khata" type="button">Credit (khata)</button>
+          <button role="tab" aria-selected="false" data-tab="rt" type="button">Regular orders</button>
+          <button role="tab" aria-selected="false" data-tab="hist" type="button">Past purchases</button>
+        </div>
+        <div class="pane" id="pane-inv"></div>
+        <div class="pane" id="pane-khata" hidden></div>
+        <div class="pane" id="pane-rt" hidden></div>
+        <div class="pane" id="pane-hist" hidden></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="report">
+    <div class="col-h"><h2 id="repTitle">Business report</h2><span>what the owner sees · today updates as orders are packed</span></div>
+    <div class="rep-grid">
+      <div class="card" id="rep-today"></div>
+      <div class="card wide" id="rep-month"></div>
+      <div class="card" id="rep-health"></div>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rs = n => '₹' + Number(n).toLocaleString('en-IN');
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const fmt = m => { const h = Math.floor(m/60)%24, mm = String(m%60).padStart(2,'0'); return `${(h%12)||12}:${mm} ${h<12?'AM':'PM'}`; };
+const pct = x => (Math.round(x * 1000) / 10) + '%';
+const short = v => v >= 100000 ? '₹' + (v/100000).toFixed(1) + 'L' : '₹' + Math.round(v/1000) + 'k';
+const initials = s => s.split(/\s+/).filter(w => /^[A-Za-z]/.test(w)).map(w => w[0]).join('').slice(0,2).toUpperCase();
+
+let shops = [], cur = null, filter = 'All', clock = 9*60, busy = Promise.resolve();
+const sessions = {};   // per shop: saved chats, flow step, open order
+const S = () => sessions[cur.shop.shop_id];
+
+async function api(path, body){
+  try {
+    const r = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const j = await r.json();
+    if (!r.ok && j.ok === undefined) j.ok = false;
+    return j;
+  } catch (e) {
+    toast('Could not reach the Knode server. Is app.py running?');
+    throw e;
+  }
+}
+function toast(msg){ const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 4000); }
+
+/* ---------- chat helpers ---------- */
+function add(chat, who, html){
+  const el = document.createElement('div');
+  el.className = 'msg ' + who;
+  el.innerHTML = who === 'sys' ? html : `${html}<span class="t">${fmt(clock)}${who==='me'?' ✓✓':''}</span>`;
+  const box = $('#'+chat); box.appendChild(el); box.scrollTop = box.scrollHeight;
+  return el;
+}
+async function bot(chat, html, ms = 600){
+  const box = $('#'+chat);
+  const t = document.createElement('div'); t.className = 'msg them typing'; t.innerHTML = '<i></i><i></i><i></i>';
+  box.appendChild(t); box.scrollTop = box.scrollHeight;
+  await wait(ms); t.remove();
+  return add(chat, 'them', html);
+}
+const queue = fn => (busy = busy.then(fn).catch(e => { console.error(e); }));
+const btns = list => `<div class="btns">${list.map(([act,label]) => `<button type="button" data-act="${act}">${label}</button>`).join('')}</div>`;
+function setStep(n){
+  S().step = n;
+  document.querySelectorAll('#steps li').forEach((li,i) => li.className = i+1 < n || (n === 7 && i === 6) ? 'done' : i+1 === n ? 'now' : '');
+}
+
+/* ---------- neighbourhood ---------- */
+function renderShops(){
+  const kinds = ['All', ...new Set(shops.map(s => s.kind))];
+  $('#chips').innerHTML = kinds.map(k => `<button type="button" data-kind="${esc(k)}" aria-pressed="${k === filter}">${esc(k)}</button>`).join('');
+  $('#shops').innerHTML = shops.filter(s => filter === 'All' || s.kind === filter).map(s => `
+    <button class="shopcard" type="button" data-shop="${s.shop_id}" aria-current="${cur && cur.shop.shop_id === s.shop_id}">
+      <span class="top"><span class="kind">${esc(s.kind)}</span>${s.has_knode ? '<span class="tag">On Knode</span>' : '<span class="tag mute">Not on Knode yet</span>'}</span>
+      <b>${esc(s.shop_name)}</b>
+      <small>${esc(s.tagline)}</small>
+      <span class="meta">${s.distance_m} m away · ${s.years_open} years here</span>
+      <small>${esc(s.landmark)}</small>
+    </button>`).join('');
+}
+
+async function selectShop(id){
+  if (cur && S()) { S().cust = $('#cust').innerHTML; S().shopChat = $('#shop').innerHTML; }
+  cur = await api(`/api/shops/${id}?clock=${clock}`);
+  const s = cur.shop;
+  if (!sessions[id]) sessions[id] = {cust:'', shopChat:'', step:0, phase:'idle', bill:null, started:false};
+  $('#cust').innerHTML = S().cust; $('#shop').innerHTML = S().shopChat;
+  $('#custTitle').textContent = s.shop_name; $('#custAvatar').textContent = initials(s.shop_name);
+  $('#custSub').textContent = s.has_knode ? `${s.kind.toLowerCase()} shop · ${s.bot_phone}` : 'not on Knode yet';
+  $('#ownerLabel').textContent = `${s.owner_name}, ${s.shop_name}`;
+  $('#repTitle').textContent = `Business report · ${s.shop_name}`;
+  renderShops(); renderSetup(); renderPanels(); setStep(S().step);
+  if (s.has_knode && !S().started) startSession();
+}
+
+function renderSetup(){
+  const s = cur.shop, f = $('#setup');
+  f.classList.toggle('live', !!s.has_knode);
+  $('#custLock').hidden = !!s.has_knode;
+  $('#custLock').innerHTML = `${esc(s.shop_name)} isn't on Knode yet, so it can't take phone orders.<br><br>Sign up ${esc(s.owner_name)} above to try it.`;
+  document.querySelectorAll('[data-sample]').forEach(b => b.disabled = !s.has_knode);
+  if (s.has_knode) {
+    f.innerHTML = `<span><span class="live-dot"></span><b>${esc(s.shop_name)}</b> is live on Knode. Customers order by messaging <b>${esc(s.bot_phone)}</b>.</span>`;
+  } else {
+    f.innerHTML = `<p class="lead">Sign up ${esc(s.shop_name)} for Knode<small>${s.years_open} years serving ${esc(s.landmark)}, with no online ordering yet.</small></p>
+      <label for="shopName">Shop name<input id="shopName" value="${esc(s.shop_name)}" readonly></label>
+      <label for="ownerName">Owner name<input id="ownerName" value="${esc(s.owner_name)}" required></label>
+      <label for="ownerPhone">Owner phone<input id="ownerPhone" value="+91 98450 ${String(10000 + s.distance_m).slice(-5)}" required></label>
+      <button class="primary" type="submit">Sign up &amp; create helper bot</button>`;
+  }
+}
+
+function startSession(){
+  const s = cur.shop; S().started = true;
+  queue(async () => {
+    if (S().step < 2) setStep(2);
+    add('shop', 'sys', 'Today');
+    await bot('shop', `Good morning, ${esc(s.owner_name)}. ${cur.products.length} products in stock, ${cur.khata.length} customer khatas, ${cur.routines.filter(r => r.state === 'pending').length} regular orders still to deliver today.`, 400);
+    for (const r of cur.routines) if (r.state === 'pending' && r.due <= clock) await remind(r);
+    add('cust', 'sys', 'Messages are simulated for this demo');
+    await bot('cust', `Hi Meena! You can order from ${esc(s.shop_name)} right here. Send a voice note, a text, or a photo of your list.`, 400);
+  });
+}
+
+async function onboard(){
+  const s = cur.shop, owner = $('#ownerName').value.trim() || s.owner_name;
+  setStep(1);
+  await api(`/api/shops/${s.shop_id}/onboard`, {owner_name: owner});
+  shops = await api('/api/shops');
+  cur = await api(`/api/shops/${s.shop_id}?clock=${clock}`);
+  renderShops(); renderSetup(); renderPanels();
+  $('#custSub').textContent = `${s.kind.toLowerCase()} shop · ${s.bot_phone}`;
+  S().started = true;
+  queue(async () => {
+    add('shop', 'sys', 'Today');
+    await bot('shop', `Welcome, ${esc(owner)}! I'm your shop helper for <b>${esc(s.shop_name)}</b>.`, 600);
+    await bot('shop', `I loaded <b>${cur.products.length} products</b> with prices, costs and stock, <b>${cur.khata.length} customer khatas</b> and <b>${cur.routines.length} regular orders</b>.`, 700);
+    await bot('shop', `Your customers can now order by messaging <b>${esc(s.bot_phone)}</b> from their phone. Voice notes, texts and photos of lists all work. No app needed for you or them.`, 700);
+    setStep(2);
+    for (const r of cur.routines) if (r.state === 'pending' && r.due <= clock) await remind(r);
+    add('cust', 'sys', 'Messages are simulated for this demo');
+    await bot('cust', `Hi Meena! ${esc(s.shop_name)} now takes orders by phone. Send a voice note, a text, or a photo of your list.`, 400);
+  });
+}
+
+/* ---------- customer side ---------- */
+function billTable(b, pack = false){
+  const rows = b.lines.map(l => {
+    const notes = [l.note && `<small>${esc(l.note)}</small>`, l.short && `<small class="warn">only ${l.stock} in stock</small>`].filter(Boolean).join('');
+    const name = pack ? `<label><input type="checkbox"> ${esc(l.name)} × ${l.qty}</label>` : `${esc(l.name)} × ${l.qty}${notes}`;
+    return `<tr><td>${name}</td><td>${rs(l.amount)}</td></tr>`;
+  }).join('');
+  return `<table class="bill">${rows}<tr class="tot"><td>Total</td><td>${rs(b.total)}</td></tr></table>`;
+}
+async function showBill(b, intro){
+  S().phase = 'review'; S().bill = b; setStep(4);
+  if (intro) await bot('cust', intro, 700);
+  await bot('cust', `<b>Bill #${b.order_id}</b> · ${esc(b.shop_name)}${billTable(b)}Please check it. Reply to fix anything, like <i>“add …”</i> or <i>“remove …”</i>.${btns([['confirm:'+b.order_id,'Confirm order'],['change','Make a change']])}`, 900);
+  setStep(5);
+}
+async function startOrder(text, channel, intro){
+  setStep(3);
+  const r = await api(`/api/shops/${cur.shop.shop_id}/orders`, {text, channel});
+  if (!r.ok) return bot('cust', esc(r.message));
+  return showBill(r.bill, intro);
+}
+function custText(text){
+  add('cust', 'me', esc(text));
+  const sess = S();
+  queue(async () => {
+    if (sess !== S()) return;
+    if (sess.phase === 'review'){
+      const r = await api(`/api/orders/${sess.bill.order_id}/message`, {text});
+      if (!r.ok) { sess.phase = 'idle'; return bot('cust', esc(r.message)); }
+      if (r.action === 'confirm') return confirmOrder();
+      if (r.action === 'empty') { sess.phase = 'idle'; return bot('cust', esc(r.message)); }
+      if (r.action === 'error') return bot('cust', esc(r.message));
+      return showBill(r.bill, esc(r.message));
+    }
+    if (sess.phase === 'pay') return bot('cust', 'Please tap one of the payment options above.');
+    return startOrder(text, 'text');
+  });
+}
+function sample(kind){
+  const text = cur.samples[kind];
+  if (kind === 'voice'){
+    const bars = Array.from({length:32}, (_,i) => `<i style="height:${6 + Math.round(Math.abs(Math.sin(i*1.7))*16)}px"></i>`).join('');
+    add('cust', 'me', `<div class="voice"><span class="pl" aria-hidden="true">▶</span><div class="wave">${bars}</div><span>0:0${4 + text.length % 6}</span></div><details><summary>What she said</summary>${esc(text)}</details>`);
+    queue(() => startOrder(text, 'voice', `Got your voice note. I heard:<br><i>“${esc(text)}”</i>`));
+  } else if (kind === 'photo'){
+    add('cust', 'me', `<div class="paper">${esc(text).replace(/\n/g,'<br>')}</div>`);
+    queue(() => startOrder(text, 'photo', `Got your photo. I read: <i>${esc(text).replace(/\n/g,' · ')}</i>`));
+  } else custText(text);
+}
+async function confirmOrder(){
+  const b = S().bill;
+  if (b.pay_mode) return sendToShop(b.pay_mode, `Thanks! Order #${b.order_id} is with the shop. It will go on your khata as you asked. I'll tell you once it's packed.`);
+  S().phase = 'pay';
+  await bot('cust', `Order confirmed. How would you like to pay ${rs(b.total)}?${btns([['pay-khata:'+b.order_id,'Add to my khata'],['pay-cash:'+b.order_id,'Cash / UPI on delivery']])}`);
+}
+async function sendToShop(pay, msg){
+  const r = await api(`/api/orders/${S().bill.order_id}/confirm`, {pay_mode: pay});
+  if (!r.ok) return bot('cust', esc(r.message));
+  S().phase = 'sent'; S().bill = r.bill;
+  await bot('cust', msg || `Thanks! Order #${r.bill.order_id} is with the shop. I'll tell you once it's packed.`);
+  setStep(6);
+  const b = r.bill, payTag = b.pay_mode === 'khata' ? `<span class="tag warn">Khata</span>` : `<span class="tag">Pay on delivery</span>`;
+  await bot('shop', `<b>New order #${b.order_id} ready to pack</b><br>Meena · Flat 204 ${payTag}<div class="pack">${billTable(b, true)}</div>Your profit on this order: <b>${rs(b.profit)}</b><br>Tick items as you pack, then tap the button.${btns([['packed:'+b.order_id,'Packed order']])}`, 800);
+}
+
+/* ---------- shop side ---------- */
+async function packed(oid){
+  const r = await api(`/api/orders/${oid}/pack`, {});
+  if (!r.ok) return bot('shop', esc(r.message));
+  const b = r.bill;
+  add('shop', 'me', 'Packed order ✓');
+  await refresh(true);
+  setStep(7);
+  await bot('cust', `Your order #${b.order_id} was accepted and packed by ${esc(b.shop_name)}. It's on the way.` +
+    (b.pay_mode === 'khata' ? `<br><br>${rs(b.total)} added to your khata. Balance: <b>${rs(r.khata_balance)}</b>` : `<br><br>Please pay ${rs(b.total)} on delivery.`), 700);
+  await bot('shop', `Done. Customer notified and stock updated. You made <b>${rs(b.profit)}</b> on this order. Today so far: ${rs(r.today.sales)} sales, ${rs(r.today.profit)} profit.`, 500);
+  if (r.low_stock.length) await bot('shop', `<span class="tag bad">Low stock</span><br>${r.low_stock.map(p => `${esc(p.name)}: <b>${p.stock} left</b>`).join('<br>')}<br>Reorder soon?`, 500);
+  S().phase = 'idle'; S().bill = null;
+}
+async function remind(r){
+  await api(`/api/routines/${r.id}/remind`, {});
+  r.reminders++;
+  const late = clock - r.due;
+  return bot('shop', `<span class="tag warn">Reminder${r.reminders > 1 ? ' #'+r.reminders : ''}</span> Regular order for <b>${esc(r.who)}</b> is not delivered yet${late > 0 ? ` (due ${fmt(r.due)}, ${Math.round(late/6)/10} h late)` : ''}.<br>${r.items.map(x => `${esc(x.name)} × ${x.qty}`).join('<br>')}${btns([['delivered:'+r.id,'Mark delivered']])}`, 500);
+}
+async function delivered(id){
+  const r = await api(`/api/routines/${id}/deliver`, {});
+  if (!r.ok) return bot('shop', esc(r.message));
+  add('shop', 'me', 'Mark delivered ✓');
+  await refresh(true);
+  await bot('shop', `Marked delivered. ${rs(r.amount)} added to ${esc(r.who)}'s khata. No more reminders for this one today.`, 400);
+}
+function shopText(text){
+  add('shop', 'me', esc(text));
+  queue(async () => { const r = await api(`/api/shops/${cur.shop.shop_id}/command`, {text, clock}); await bot('shop', r.html); });
+}
+function advance(){
+  clock += 60; $('#clock').textContent = fmt(clock);
+  if (!cur || !cur.shop.has_knode || !S().started) return;
+  queue(async () => {
+    add('shop', 'sys', fmt(clock));
+    for (const r of cur.routines) if (r.state === 'pending' && r.due <= clock) await remind(r);
+    await refresh(false);
+  });
+}
+
+/* ---------- panels and report ---------- */
+async function refresh(flash){
+  const before = cur && Object.fromEntries(cur.products.map(p => [p.id, p.stock]));
+  const khBefore = cur && Object.fromEntries(cur.khata.map(k => [k.who, k.balance]));
+  cur = await api(`/api/shops/${cur.shop.shop_id}?clock=${clock}`);
+  renderPanels(flash ? {before, khBefore} : null);
+}
+function renderPanels(changed){
+  const ch = changed || {before:{}, khBefore:{}};
+  $('#pane-inv').innerHTML = `<table class="tbl"><thead><tr><th>Product</th><th class="r">Price</th><th class="r">Stock</th></tr></thead><tbody>${
+    cur.products.map(p => `<tr class="${ch.before[p.id] !== undefined && ch.before[p.id] !== p.stock ? 'flash' : ''}"><td>${esc(p.name)}</td><td class="r">${rs(p.price)}<small>cost ${rs(p.cost)}</small></td><td class="r">${p.stock < 6 ? `<span class="tag bad">${p.stock}</span>` : p.stock < 10 ? `<span class="tag warn">${p.stock}</span>` : p.stock}</td></tr>`).join('')
+  }</tbody></table>`;
+  const owed = cur.khata.reduce((a,k) => a + k.balance, 0);
+  $('#pane-khata').innerHTML = `<table class="tbl"><thead><tr><th>Customer</th><th class="r">Owes</th></tr></thead><tbody>${
+    cur.khata.map(k => `<tr class="${ch.khBefore[k.who] !== undefined && ch.khBefore[k.who] !== k.balance ? 'flash' : ''}"><td>${esc(k.who)}</td><td class="r">${k.balance ? rs(k.balance) : '<span class="tag">Paid up</span>'}</td></tr>`).join('')
+  }<tr><td><b>Total to collect</b></td><td class="r"><b>${rs(owed)}</b></td></tr></tbody></table><p class="note">Orders paid on khata are added here when the shop taps Packed order.</p>`;
+  $('#pane-rt').innerHTML = (cur.routines.length ? cur.routines.map(r => {
+    const late = r.state === 'pending' && r.due <= clock;
+    const tag = r.state === 'done' ? '<span class="tag">Delivered</span>' : late ? '<span class="tag bad">Overdue</span>' : `<span class="tag warn">Due ${fmt(r.due)}</span>`;
+    return `<div class="rt"><div class="rt-top"><b>${esc(r.who)}</b>${tag}</div><span>${r.items.map(x => `${esc(x.name)} × ${x.qty}`).join(', ')}</span><small>${esc(r.label)}${r.reminders ? ` · ${r.reminders} reminder${r.reminders>1?'s':''} sent` : ''}</small></div>`;
+  }).join('') : '<p class="note">No regular orders at this shop.</p>') + `<p class="note">The bot reminds the shop every hour until each regular order is marked delivered.</p>`;
+  const h = Object.entries(cur.history);
+  $('#pane-hist').innerHTML = h.length
+    ? `<div class="cust"><b>Meena at ${esc(cur.shop.shop_name)}</b><ul>${h.map(([c,v]) => `<li>${esc(c[0].toUpperCase() + c.slice(1))} → ${v.map(x => `${esc(x.name)} × ${x.qty}`).join(', ')}</li>`).join('')}</ul></div><p class="note">When Meena says something vague like “${esc(h[0][0])}”, the bot picks her usual item and quantity from this list and marks it on the bill so she can correct it.</p>`
+    : `<p class="note">Meena hasn't bought here before. For vague requests the bot picks the shop's most popular item and says so on the bill.</p>`;
+  renderReport(changed);
+}
+function salesChart(months){
+  const W = 560, H = 220, L = 46, R = 8, T = 18, B = 26;
+  const top = Math.max(...months.map(d => d.sales)), step = top > 150000 ? 50000 : top > 60000 ? 20000 : 10000;
+  const max = Math.ceil(top * 1.08 / step) * step, ph = H - T - B;
+  const y = v => T + ph * (1 - v / max), bw = (W - L - R) / months.length;
+  let g = '';
+  for (let v = 0; v <= max; v += step)
+    g += `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end">${v ? '₹' + v/1000 + 'k' : '0'}</text>`;
+  months.forEach((d,i) => {
+    const x = L + i*bw + bw*0.2, w = bw*0.6, last = i === months.length-1;
+    g += `<rect x="${x}" y="${y(d.sales)}" width="${w}" height="${y(0)-y(d.sales)}" rx="3" fill="var(--bar)"/>`;
+    g += `<rect x="${x}" y="${y(d.profit)}" width="${w}" height="${y(0)-y(d.profit)}" fill="var(--accent)"/>`;
+    g += `<text class="${last ? 'val' : ''}" x="${x+w/2}" y="${y(d.sales)-5}" text-anchor="middle">${short(d.sales)}</text>`;
+    g += `<text x="${x+w/2}" y="${H-8}" text-anchor="middle" class="${last ? 'val' : ''}">${d.m}</text>`;
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly sales and profit, May to October 2026">${g}</svg>`;
+}
+function renderReport(flash){
+  const rep = cur.report, t = rep.today, months = rep.months, o = months[months.length-1], prev = months[months.length-2];
+  const tc = $('#rep-today');
+  tc.innerHTML = `<h3>Today <small>live</small></h3>
+    <div class="kpis">
+      <div class="kpi"><span>Sales</span><b>${rs(t.sales)}</b><small>${t.orders} orders</small></div>
+      <div class="kpi"><span>Profit</span><b>${rs(t.profit)}</b><small>${pct(t.profit/t.sales)} margin</small></div>
+      <div class="kpi"><span>Via Knode</span><b>${t.phone}</b><small>phone orders packed</small></div>
+    </div>
+    <p class="note" style="margin:0">Starts with this morning's counter sales. Each packed order and delivered regular order adds its sales and profit.</p>`;
+  if (flash){ tc.classList.remove('flash-card'); void tc.offsetWidth; tc.classList.add('flash-card'); }
+  const g = o.sales / prev.sales - 1;
+  $('#rep-month').innerHTML = `<h3>Monthly sales report <small>October 2026 · last 6 months below</small></h3>
+    <div class="kpis">
+      <div class="kpi"><span>Sales</span><b>${rs(o.sales)}</b><small class="${g >= 0 ? 'up' : 'down'}">${g >= 0 ? '▲' : '▼'} ${pct(Math.abs(g))} vs Sep</small></div>
+      <div class="kpi"><span>Profit</span><b>${rs(o.profit)}</b><small>${pct(o.profit/o.sales)} margin</small></div>
+      <div class="kpi"><span>Orders</span><b>${o.orders.toLocaleString('en-IN')}</b><small>avg bill ${rs(Math.round(o.sales/o.orders))}</small></div>
+      <div class="kpi"><span>By phone</span><b>${o.phone}%</b><small>${o.phone ? `of orders, up from ${months[0].phone}% in May` : 'joins Knode to start'}</small></div>
+    </div>
+    ${salesChart(months)}
+    <div class="legend"><span><i style="background:var(--bar)"></i>Sales</span><span><i style="background:var(--accent)"></i>Profit</span></div>
+    <table class="tbl"><thead><tr><th>Top sellers in October</th><th class="r">Sales</th></tr></thead><tbody>${rep.top.map(([n,v]) => `<tr><td>${esc(n)}</td><td class="r">${rs(v)}</td></tr>`).join('')}</tbody></table>`;
+  const h = rep.health, tone = h.score >= 80 ? 'var(--ok)' : h.score >= 60 ? 'var(--warn)' : 'var(--bad)', c = 2 * Math.PI * 30;
+  $('#rep-health').innerHTML = `<h3>Business health <small>live</small></h3>
+    <div class="score"><svg class="ring" viewBox="0 0 72 72" aria-hidden="true"><circle cx="36" cy="36" r="30" fill="none" stroke="var(--line)" stroke-width="7"/><circle cx="36" cy="36" r="30" fill="none" stroke="${tone}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${c*h.score/100} ${c}" transform="rotate(-90 36 36)"/><text x="36" y="44" text-anchor="middle">${h.score}</text></svg>
+      <div><b style="font-size:16px">${h.label}</b><br><small style="color:var(--muted)">Score out of 100, from the five checks below</small></div></div>
+    <ul class="factors">${h.factors.map(f => `<li><div><b>${f.name}</b><small>${f.why}</small></div><span class="tag ${f.s === 'good' ? '' : f.s === 'watch' ? 'warn' : 'bad'}">${f.s === 'good' ? 'Good' : f.s === 'watch' ? 'Watch' : 'Act now'}</span></li>`).join('')}</ul>`;
+}
+
+/* ---------- wiring ---------- */
+document.addEventListener('submit', e => {
+  e.preventDefault();
+  if (e.target.id === 'setup') return onboard();
+  const isCust = e.target.id === 'custForm', input = isCust ? $('#custInput') : $('#shopInput');
+  const v = input.value.trim(); if (!v || !cur) return;
+  input.value = '';
+  if (isCust){ if (cur.shop.has_knode) custText(v); }
+  else if (cur.shop.has_knode) shopText(v);
+});
+document.addEventListener('click', e => {
+  const shop = e.target.closest('[data-shop]'); if (shop) return queue(() => selectShop(shop.dataset.shop));
+  const kind = e.target.closest('[data-kind]'); if (kind) { filter = kind.dataset.kind; return renderShops(); }
+  const s = e.target.closest('[data-sample]'); if (s && !s.disabled) return S().phase === 'idle' ? sample(s.dataset.sample) : toast('Finish or change the open bill first.');
+  const tab = e.target.closest('[data-tab]');
+  if (tab){
+    document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b === tab));
+    document.querySelectorAll('.pane').forEach(p => p.hidden = p.id !== 'pane-' + tab.dataset.tab);
+    return;
+  }
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const [act, id] = b.dataset.act.split(':');
+  if (act === 'change'){ const i = $('#custInput'); i.placeholder = 'e.g. add 2 … / remove …'; i.focus(); return; }
+  if (act === 'confirm' && (S().phase !== 'review' || String(S().bill.order_id) !== id)) return;
+  if (act.startsWith('pay') && S().phase !== 'pay') return;
+  b.parentElement.querySelectorAll('button').forEach(x => x.disabled = true);
+  if (act === 'confirm'){ add('cust','me','Confirm order'); queue(confirmOrder); }
+  else if (act === 'pay-khata' || act === 'pay-cash'){
+    add('cust','me', act === 'pay-khata' ? 'Add to my khata' : 'Cash / UPI on delivery');
+    queue(() => sendToShop(act === 'pay-khata' ? 'khata' : 'cash'));
+  }
+  else if (act === 'packed') queue(() => packed(id));
+  else if (act === 'delivered') queue(() => delivered(id));
+});
+$('#advance').addEventListener('click', advance);
+$('#reset').addEventListener('click', () => queue(async () => {
+  $('#dbline').textContent = 'Resetting data in Exasol…';
+  await api('/api/reset', {});
+  for (const k in sessions) delete sessions[k];
+  cur = null; clock = 9*60; $('#clock').textContent = fmt(clock);
+  await boot();
+}));
+
+async function boot(){
+  shops = await api('/api/shops');
+  $('#dbline').innerHTML = `Data: <b>Exasol Personal</b> on this computer · ${shops.length} shops`;
+  renderShops();
+  await selectShop(shops.find(s => s.has_knode).shop_id);
+}
+queue(boot);
+</script>
+</body>
+</html>
